@@ -1,0 +1,29 @@
+# Déploiement en 1 clic sur Render : New + > Blueprint > choisir ce dépôt.
+services:
+  - type: web
+    name: chauffpro
+    runtime: docker
+    plan: starter            # ~7 $/mois : nécessaire pour garder la base de données (disque)
+    region: frankfurt        # serveurs en Europe (RGPD)
+    healthCheckPath: /health
+    disk:
+      name: donnees
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: DATABASE_FILE
+        value: /var/data/chauffapp.db
+      - key: BASE_URL
+        sync: false          # ex. https://app.votredomaine.fr
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false          # ex. notifications@votredomaine.fr (domaine validé dans Brevo)
+      - key: APP_NAME
+        value: ChauffPro
+      - key: INBOUND_KEY
+        generateValue: true
