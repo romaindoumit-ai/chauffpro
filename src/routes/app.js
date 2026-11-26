@@ -100,7 +100,7 @@ ${rows.length ? `<table><tr><th>Client</th><th>Projet</th><th>Statut</th><th>Mon
     const act = (status, label, cls = 'sec') => `<form method="post" action="/app/demandes/${l.id}/statut"><input type="hidden" name="status" value="${status}"><button class="btn sm ${cls}">${label}</button></form>`;
     const f = (k, label, type = 'text') => `<div><label>${label}</label><input name="${k}" type="${type}" value="${U.esc(k === 'phone' ? U.displayPhone(l[k]) : l[k] ?? '')}"></div>`;
     res.send(appLayout(req, fullName(l), `<p class="small"><a href="/app/demandes">← Toutes les demandes</a></p>
-<div class="row"><h1 style="flex:3">${fullName(l)} ${badge(l.status)}</h1></div>
+<div class="row"><h1 style="flex:3">${fullName(l)} ${badge(l.status)}${l.lang === 'nl' ? ' <span class="badge" style="background:#495057" title="Ce client a écrit en néerlandais : ses messages automatiques partent en néerlandais">NL</span>' : ''}</h1></div>
 ${l.client_response === 'rappel' && l.status === 'devis_envoye' ? '<div class="banner">📞 Ce client a demandé à être rappelé. Les relances sont en pause.</div>' : ''}
 ${l.opt_out_sms || l.opt_out_email ? `<div class="banner">Ce client s'est désinscrit (${[l.opt_out_sms && 'SMS', l.opt_out_email && 'e-mail'].filter(Boolean).join(', ')}). Aucun message automatique ne lui sera envoyé sur ce canal.</div>` : ''}
 <div class="grid g2"><div>
@@ -264,7 +264,7 @@ ${signed.length ? `<h2>Chantiers signés</h2><table><tr><th>Client</th><th>Proje
     const a = req.account, B = E.BASE();
     res.send(appLayout(req, 'Intégration', `<h1>Formulaire, site & appels manqués</h1>
 <div class="grid g2">
-<div class="card"><h3>1. Formulaire de devis</h3><p>Lien direct (à mettre sur Facebook, Google Business, cartes de visite…) :</p><pre class="code">${B}/f/${a.slug}</pre><a class="btn sm sec" target="_blank" href="/f/${a.slug}">Voir le formulaire</a>
+<div class="card"><h3>1. Formulaire de devis</h3><p>Lien direct (à mettre sur Facebook, Google Business, cartes de visite…) :</p><pre class="code">${B}/f/${a.slug}</pre><p class="small">En néerlandais : <code>${B}/f/${a.slug}?lang=nl</code>. Le formulaire s'affiche aussi tout seul en néerlandais si le téléphone du client est réglé en néerlandais.</p><a class="btn sm sec" target="_blank" href="/f/${a.slug}">Voir le formulaire</a>
 <p>Pour l'intégrer à un site existant (WordPress, Wix…), copiez ce code :</p><pre class="code">${U.esc(`<iframe src="${B}/f/${a.slug}?embed=1" style="width:100%;min-height:980px;border:0" title="Demande de devis"></iframe>`)}</pre></div>
 <div class="card"><h3>2. Mini-site vitrine</h3><p>Site prêt à l'emploi avec le formulaire intégré :</p><pre class="code">${B}/s/${a.slug}</pre><a class="btn sm sec" target="_blank" href="/s/${a.slug}">Voir le site</a>
 <p class="small muted">Textes, prestations, couleur et zone d'intervention se modifient dans Réglages. Pour un nom de domaine à lui (ex. dupont-chauffage.fr), faites une redirection vers ce lien.</p></div>
@@ -346,7 +346,9 @@ ${chk('conf_enabled', s.confirmation.enabled, '<b>Accusé de réception</b> au c
 <div class="row"><div><label>Envois clients à partir de (h)</label><input name="win_start" type="number" min="8" max="20" value="${s.window.start}"></div><div><label>jusqu'à (h)</label><input name="win_end" type="number" min="9" max="20" value="${s.window.end}"></div></div>
 <label>Mention ajoutée aux SMS de relance et d'avis (laisser vide avec Brevo, qui ajoute « STOP au 3xxxx » automatiquement)</label><input name="sms_footer" value="${U.esc(s.sms_footer)}"></div>
 <div class="card"><h3>Textes des messages</h3><p class="small muted">Variables : {prenom} {nom} {entreprise} {artisan} {tel} {travaux} {ref} {montant} {lien} (réponse au devis) {lien_avis} {lien_rdv}</p>
-${Object.keys(T).filter((k) => k !== 'appel_vocal').map((k) => tpl(k, k.replace(/_/g, ' '))).join('')}${tpl('appel_vocal', 'message vocal (Twilio)')}</div></div>
+${Object.keys(T).filter((k) => k !== 'appel_vocal').map((k) => tpl(k, k.replace(/_/g, ' '))).join('')}${tpl('appel_vocal', 'message vocal (Twilio)')}
+<details style="margin-top:12px"><summary><b>🇧🇪 Textes en néerlandais</b> (clients qui remplissent le formulaire en NL)</summary>
+${Object.keys(DEFAULT_SETTINGS.templates_nl).map((k) => `<label>${k.replace(/_/g, ' ')} (NL)</label>${k.endsWith('_subject') ? `<input name="tplnl_${k}" value="${U.esc(s.templates_nl[k])}">` : `<textarea name="tplnl_${k}" rows="${k.endsWith('_sms') ? 3 : 6}">${U.esc(s.templates_nl[k])}</textarea>`}`).join('')}</details></div></div>
 <p><button class="btn">Enregistrer les réglages</button></p></form>
 <div class="card" style="max-width:480px;margin-top:14px"><h3>Mot de passe</h3><form method="post" action="/app/mot-de-passe"><label>Nouveau mot de passe</label><input type="password" name="password" minlength="8" required><p><button class="btn sec">Changer</button></p></form></div>`, 'reglages'));
   });
@@ -367,6 +369,7 @@ ${Object.keys(T).filter((k) => k !== 'appel_vocal').map((k) => tpl(k, k.replace(
     s.window = { start: Math.min(20, Math.max(8, n(b.win_start, 9))), end: Math.min(20, Math.max(9, n(b.win_end, 19))) };
     s.sms_footer = String(b.sms_footer ?? s.sms_footer);
     for (const k of Object.keys(DEFAULT_SETTINGS.templates)) if (b[`tpl_${k}`] !== undefined) s.templates[k] = String(b[`tpl_${k}`]);
+    for (const k of Object.keys(DEFAULT_SETTINGS.templates_nl)) if (b[`tplnl_${k}`] !== undefined) s.templates_nl[k] = String(b[`tplnl_${k}`]);
     const email = String(b.email || a.email).trim().toLowerCase();
     const country = U.COUNTRIES[b.country] ? b.country : U.countryOf(a);
     if (db.prepare('SELECT 1 FROM accounts WHERE email=? AND id<>?').get(email, a.id)) return res.redirect('/app/reglages?err=' + encodeURIComponent('Cet e-mail est déjà utilisé par un autre compte.'));

@@ -105,7 +105,7 @@ function migrate(db) {
   `);
   // Colonnes ajoutées après la première version (les bases existantes sont mises à jour automatiquement).
   addColumns(db, 'accounts', { country: "TEXT DEFAULT 'BE'", is_demo: 'INTEGER DEFAULT 0' });
-  addColumns(db, 'leads', { visit_at: 'TEXT', ai_summary: 'TEXT', ai_draft: 'TEXT' }); // début du créneau de visite choisi (UTC)
+  addColumns(db, 'leads', { visit_at: 'TEXT', ai_summary: 'TEXT', ai_draft: 'TEXT', lang: "TEXT DEFAULT 'fr'" }); // début du créneau de visite choisi (UTC)
 }
 
 function addColumns(db, table, cols) {

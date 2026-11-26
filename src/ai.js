@@ -85,7 +85,7 @@ ${leadInfo(lead)}
 
 Ce que l'artisan veut dire : ${instruction ? `<artisan>${String(instruction).slice(0, 500)}</artisan>` : 'une réponse adaptée à la situation (accusé de réception, proposition de visite, suivi du devis…).'}
 
-Rédige ${sms ? 'un SMS de 300 caractères maximum, sans objet, signé du prénom de l\'artisan' : 'un e-mail court (5 à 8 lignes) commençant par « Bonjour [prénom du client], » et signé avec le nom de l\'artisan et l\'entreprise, sans ligne d\'objet'}.`, { maxTokens: sms ? 400 : 1000 });
+${lead.lang === 'nl' ? 'Le client est néerlandophone : écris le message EN NÉERLANDAIS (néerlandais de Belgique, vouvoiement « u »). ' : ''}Rédige ${sms ? 'un SMS de 300 caractères maximum, sans objet, signé du prénom de l\'artisan' : 'un e-mail court (5 à 8 lignes) commençant par « Bonjour [prénom du client], » (ou « Beste [prénom], » en néerlandais) et signé avec le nom de l\'artisan et l\'entreprise, sans ligne d\'objet'}.`, { maxTokens: sms ? 400 : 1000 });
 }
 
 /** Réponse publique à un avis Google. */

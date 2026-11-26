@@ -111,7 +111,7 @@ test("ancien client ajouté à la main -> rappel d'entretien ; il reprend RDV ->
   // Le client clique sur le lien du SMS et choisit un créneau
   s.resetCookie();
   r = await s.req(`/rdv/chauffage-dubois?l=${lead.token}`);
-  assert.match(r.text, /<option selected>Entretien ou dépannage chaudière/);
+  assert.match(r.text, /value="Entretien ou dépannage chaudière" selected/);
   await s.req('/rdv/chauffage-dubois', { method: 'POST', form: { l: lead.token, work_type: 'Entretien ou dépannage chaudière', first_name: 'Jan', phone: '0478112233', city: '1000', day: 'lundi', slot: 'Matin (8h-12h)', consent: '1' } });
   const leads = s.db.prepare('SELECT * FROM leads ORDER BY id').all();
   assert.equal(leads.length, 2);
@@ -227,4 +227,43 @@ test("assistant IA : invisible sans clé, résumé et brouillons avec clé, limi
     r = await s.req(`/app/demandes/${lead.id}/ia/resume`, { method: 'POST', form: {} });
     assert.match(decodeURIComponent(r.location), /Limite de 4/);
   } finally { delete process.env.AI_DAILY_LIMIT; }
+});
+
+test('formulaire en néerlandais : page, données en français pour l\'artisan, messages au client en néerlandais', async (t) => {
+  const s = await boot();
+  t.after(() => s.server.close());
+  await s.login('admin@test.be', 'admin-secret');
+  await s.req('/admin/comptes', { method: 'POST', form: { company_name: 'Chauffage Dubois', email: 'dubois@test.be', country: 'BE' } });
+  s.resetCookie();
+  let r = await s.req('/f/chauffage-dubois?lang=nl');
+  assert.match(r.text, /<html lang="nl">/);
+  assert.match(r.text, /Gratis offerte aanvragen/);
+  assert.match(r.text, /Vervanging verwarmingsketel/);
+  assert.match(r.text, /Kies een tijdslot/);
+  // Détection automatique via la langue du téléphone
+  r = await s.req('/f/chauffage-dubois', { headers: { 'accept-language': 'nl-BE,nl;q=0.9' } });
+  assert.match(r.text, /Gratis offerte aanvragen/);
+  assert.match((await s.req('/f/chauffage-dubois')).text, /Demande de devis gratuit/);
+  // Erreur affichée en néerlandais
+  r = await s.req('/f/chauffage-dubois', { method: 'POST', form: { lang: 'nl', work_type: 'Remplacement de chaudière', first_name: 'Jan', phone: '123', postal_code: '1000', consent: '1' } });
+  assert.match(r.text, /telefoonnummer lijkt niet correct/);
+  r = await s.req('/f/chauffage-dubois', { method: 'POST', form: { lang: 'nl', work_type: 'Remplacement de chaudière', housing: 'Maison', energy: 'Mazout / fioul', first_name: 'Jan', phone: '0478 12 34 56', email: 'jan@x.be', postal_code: '1000', consent: '1' } });
+  assert.match(r.location, /lang=nl/);
+  assert.match((await s.req(r.location)).text, /Aanvraag verstuurd/);
+  const lead = s.db.prepare('SELECT * FROM leads').get();
+  assert.equal(lead.lang, 'nl');
+  assert.equal(lead.work_type, 'Remplacement de chaudière'); // l'artisan lit en français
+  assert.match(lead.message, /Mazout/);
+  const sms = s.db.prepare("SELECT body FROM messages WHERE kind='confirmation' AND channel='sms'").get().body;
+  assert.match(sms, /^Beste Jan, Chauffage Dubois heeft uw aanvraag goed ontvangen \(Vervanging verwarmingsketel\)/);
+  const mail = s.db.prepare("SELECT html FROM messages WHERE kind='confirmation' AND channel='email'").get().html;
+  assert.match(mail, /Geen e-mails meer ontvangen/);
+  // Relance : boutons en néerlandais, page de réponse en néerlandais
+  const E = require('../src/engine');
+  const a = s.db.prepare('SELECT * FROM accounts WHERE slug=?').get('chauffage-dubois');
+  E.setStatus(s.db, a, lead.id, 'devis_envoye', { quote_amount: 4500 });
+  assert.match(s.db.prepare("SELECT html FROM messages WHERE kind='relance_1' AND channel='email'").get().html, /Ik aanvaard de offerte/);
+  assert.match((await s.req(`/c/${lead.token}`)).text, /Uw offerte/);
+  assert.match((await s.req('/s/chauffage-dubois/confidentialite?lang=nl')).text, /Gegevensbeschermingsautoriteit/);
+  assert.match((await s.req('/s/chauffage-dubois?lang=nl')).text, /Onze diensten/);
 });

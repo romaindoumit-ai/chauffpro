@@ -3,6 +3,7 @@ const U = require('./util');
 const { mergeSettings, KINDS, STATUSES } = require('./defaults');
 const providers = require('./providers');
 const V = require('./visits');
+const I = require('./i18n');
 
 const BASE = () => (process.env.BASE_URL || 'http://localhost:3000').replace(/\/$/, '');
 const now = () => new Date();
@@ -19,25 +20,27 @@ function logEvent(db, accountId, leadId, type, detail = '') {
 
 function varsFor(account, lead = {}) {
   const amount = lead.quote_amount ? U.euros(lead.quote_amount) : '';
+  const lang = lead.lang === 'nl' ? 'nl' : 'fr';
+  const nl = lang === 'nl' ? '&lang=nl' : '';
   return {
     prenom: lead.first_name || '', nom: lead.last_name || '',
     entreprise: account.company_name, artisan: (account.owner_name || account.company_name || '').split(' ')[0],
-    tel: U.displayPhone(account.phone), travaux: lead.work_type || 'vos travaux',
+    tel: U.displayPhone(account.phone), travaux: lead.work_type ? I.workLabel(lead.work_type, lang) : I.t(lang)('your_work'),
     ref: lead.quote_ref ? `n°${lead.quote_ref}` : '', montant: amount, montant_txt: amount ? `, ${amount}` : '',
     lien: lead.token ? `${BASE()}/c/${lead.token}` : '',
     lien_avis: lead.token ? `${BASE()}/avis/${lead.token}` : account.google_review_url || '',
-    lien_rdv: `${BASE()}/rdv/${account.slug}${lead.token ? `?l=${lead.token}` : ''}`,
-    visite: lead.visit_at ? V.label(lead.visit_at, account) : '',
+    lien_rdv: `${BASE()}/rdv/${account.slug}${lead.token ? `?l=${lead.token}${nl}` : ''}`,
+    visite: lead.visit_at ? V.label(lead.visit_at, account, lang) : '',
   };
 }
-const fill = (tpl, vars) => U.render(tpl, vars).replace(/Bonjour ,/g, 'Bonjour,').replace(/ +/g, ' ').replace(/ \./g, '.').trim();
+const fill = (tpl, vars) => U.render(tpl, vars).replace(/(Bonjour|Beste) ,/g, '$1,').replace(/ +/g, ' ').replace(/ \./g, '.').trim();
 
 function emailHtml(account, text, { buttons = [], lead } = {}) {
   const color = account.primary_color || '#d9480f';
   const paras = U.esc(text).split(/\n{2,}/).map((p) => `<p style="margin:0 0 14px">${p.replace(/\n/g, '<br>')}</p>`).join('');
   const btns = buttons.map((b) => `<a href="${U.esc(b.href)}" style="display:inline-block;margin:4px 6px 4px 0;padding:11px 18px;border-radius:8px;text-decoration:none;font-weight:600;${b.primary ? `background:${color};color:#fff` : `background:#f1f3f5;color:#212529`}">${U.esc(b.label)}</a>`).join('');
-  const unsub = lead && lead.token ? `<a href="${BASE()}/desinscription/${lead.token}" style="color:#868e96">Ne plus recevoir d'e-mails</a>` : '';
-  return `<!doctype html><html><body style="margin:0;background:#f8f9fa;font-family:Arial,Helvetica,sans-serif;color:#212529">
+  const unsub = lead && lead.token ? `<a href="${BASE()}/desinscription/${lead.token}" style="color:#868e96">${I.t(lead.lang)('e_unsub')}</a>` : '';
+  return `<!doctype html><html lang="${lead && lead.lang === 'nl' ? 'nl' : 'fr'}"><body style="margin:0;background:#f8f9fa;font-family:Arial,Helvetica,sans-serif;color:#212529">
 <div style="max-width:560px;margin:0 auto;padding:24px"><div style="background:#fff;border-radius:12px;padding:28px;border-top:5px solid ${color}">
 <div style="font-weight:700;font-size:18px;margin-bottom:18px">${U.esc(account.company_name)}</div>${paras}${btns ? `<div style="margin-top:8px">${btns}</div>` : ''}</div>
 <div style="font-size:12px;color:#868e96;text-align:center;margin-top:14px">${U.esc(account.company_name)}${account.address ? ' · ' + U.esc(account.address) : ''}<br>${unsub}</div></div></body></html>`;
@@ -55,7 +58,8 @@ function isOptedOut(db, lead, channel) {
 /** Programme un message. Renvoie l'id ou null si impossible (pas de contact, désinscrit…). */
 function schedule(db, account, lead, kind, channel, at, { tplKey, respectWindow = true, window } = {}) {
   const s = settingsOf(account);
-  const t = s.templates;
+  const t = lead.lang === 'nl' ? { ...s.templates, ...s.templates_nl } : s.templates; // clients néerlandophones
+  const tr = I.t(lead.lang);
   const vars = varsFor(account, lead);
   let to, body, subject = null, html = null;
   if (channel === 'sms') {
@@ -71,12 +75,12 @@ function schedule(db, account, lead, kind, channel, at, { tplKey, respectWindow 
     subject = fill(t[`${key}_email_subject`], vars);
     let buttons = [];
     if (kind.startsWith('relance')) buttons = [
-      { label: '✔ J\'accepte le devis', href: `${vars.lien}?choix=ok`, primary: true },
-      { label: 'Rappelez-moi', href: `${vars.lien}?choix=rappel` },
-      { label: 'Je ne donne pas suite', href: `${vars.lien}?choix=non` },
+      { label: tr('e_ok'), href: `${vars.lien}?choix=ok`, primary: true },
+      { label: tr('e_rappel'), href: `${vars.lien}?choix=rappel` },
+      { label: tr('e_non'), href: `${vars.lien}?choix=non` },
     ];
-    if (kind.startsWith('avis')) buttons = [{ label: '⭐ Laisser un avis Google', href: vars.lien_avis, primary: true }];
-    if (kind === 'entretien') buttons = [{ label: '📅 Choisir un créneau', href: vars.lien_rdv, primary: true }];
+    if (kind.startsWith('avis')) buttons = [{ label: tr('e_avis'), href: vars.lien_avis, primary: true }];
+    if (kind === 'entretien') buttons = [{ label: tr('e_slot'), href: vars.lien_rdv, primary: true }];
     html = emailHtml(account, body, { buttons, lead });
   }
   let when = new Date(at);
@@ -106,10 +110,10 @@ function getLead(db, id) { return db.prepare('SELECT * FROM leads WHERE id=?').g
 function createLead(db, account, data, { source = 'formulaire', notify = true, confirm = true } = {}) {
   const phone = U.normalizePhone(data.phone, account.country);
   const email = (data.email || '').trim().toLowerCase();
-  const r = db.prepare(`INSERT INTO leads (account_id, first_name, last_name, phone, email, address, postal_code, city, work_type, message, preferred_slot, source, status, consent, token, created_at, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(account.id, (data.first_name || '').trim(), (data.last_name || '').trim(), phone, email,
+  const r = db.prepare(`INSERT INTO leads (account_id, first_name, last_name, phone, email, address, postal_code, city, work_type, message, preferred_slot, source, status, consent, token, created_at, updated_at, lang)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(account.id, (data.first_name || '').trim(), (data.last_name || '').trim(), phone, email,
     (data.address || '').trim(), (data.postal_code || '').trim(), (data.city || '').trim(), (data.work_type || '').trim(), (data.message || '').trim(),
-    (data.preferred_slot || '').trim(), source, data.visit_at ? 'rdv' : data.status || 'nouveau', data.consent ? 1 : 0, U.token(), U.iso(now()), U.iso(now()));
+    (data.preferred_slot || '').trim(), source, data.visit_at ? 'rdv' : data.status || 'nouveau', data.consent ? 1 : 0, U.token(), U.iso(now()), U.iso(now()), data.lang === 'nl' ? 'nl' : 'fr');
   if (data.visit_at) db.prepare('UPDATE leads SET visit_at=? WHERE id=?').run(data.visit_at, Number(r.lastInsertRowid));
   const lead = getLead(db, Number(r.lastInsertRowid));
   logEvent(db, account.id, lead.id, 'creation', `Demande reçue (${source})${lead.visit_at ? ` · visite réservée ${V.label(lead.visit_at, account)}` : ''}`);

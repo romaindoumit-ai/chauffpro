@@ -4,7 +4,7 @@ const { STATUSES } = require('./defaults');
 // app = page de l'espace artisan : l'appli peut être installée sur le téléphone.
 const PWA = `<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#d9480f"><link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="ChauffPro">`;
-const head = (title, color, { app } = {}) => `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+const head = (title, color, { app, lang = 'fr' } = {}) => `<!doctype html><html lang="${lang === 'nl' ? 'nl' : 'fr'}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title><link rel="stylesheet" href="/style.css">${app ? PWA : ''}${color ? `<style>:root{--c:${esc(color)}}</style>` : ''}</head>`;
 
 const APP_NAME = () => process.env.APP_NAME || 'ChauffPro';
@@ -24,8 +24,8 @@ ${nav.map(([h, l, k]) => `<a href="${h}" class="${k === active ? 'on' : ''}">${l
 <main class="main">${imp}${demo}${sim}${flash}${body}</main></div><script src="/app.js" defer></script></body></html>`;
 }
 
-function publicLayout(title, body, { color, embed, app } = {}) {
-  return `${head(title, color, { app })}<body${embed ? ' style="background:transparent"' : ''}><div class="pub"${embed ? ' style="padding:0"' : ''}>${body}</div></body></html>`;
+function publicLayout(title, body, { color, embed, app, lang } = {}) {
+  return `${head(title, color, { app, lang })}<body${embed ? ' style="background:transparent"' : ''}><div class="pub"${embed ? ' style="padding:0"' : ''}>${body}</div></body></html>`;
 }
 
 const badge = (s) => { const x = STATUSES[s] || { label: s, color: '#868e96' }; return `<span class="badge" style="background:${x.color}">${esc(x.label)}</span>`; };

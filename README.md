@@ -93,6 +93,13 @@ Pour un compte de démonstration permanent (par exemple pour un rendez-vous), la
 
 ## 5. Belgique et France
 
+### Formulaire et messages en néerlandais
+
+- Le formulaire, le mini-site, la page de rendez-vous et les pages de réponse s'affichent **en néerlandais** si le téléphone du client est réglé en néerlandais, ou avec le lien `…/f/nom-artisan?lang=nl`. Un bouton FR · NL permet de changer.
+- Les SMS et e-mails à ce client partent ensuite **en néerlandais** (textes modifiables dans Réglages › Textes en néerlandais).
+- L'artisan, lui, voit tout en français (projet, détails), avec une petite étiquette « NL » sur la fiche.
+
+
 Le logiciel est réglé pour la **Belgique** par défaut. Chaque artisan peut passer en France dans Réglages › Mini-site › Pays.
 
 - **Numéros** : `0470 12 34 56`, `+32 470…` ou `02 123 45 67` sont reconnus. Les SMS ne partent que vers les mobiles (04xx en Belgique, 06/07 en France). Un mobile français tapé dans un formulaire belge est aussi reconnu.
