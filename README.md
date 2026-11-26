@@ -99,6 +99,8 @@ Envoyez-lui simplement le lien **`https://app.chauffpro.fr/demo`** (ou cliquez s
 - Le compte s'efface tout seul après 24 heures. Les démos n'apparaissent pas dans votre administration.
 - *(Optionnel)* Mettez dans la variable `CONTACT_URL` un lien vers vous (par exemple `https://wa.me/32470123456` ou `mailto:vous@chauffpro.be`) : un bouton « Je veux ChauffPro » s'affiche alors dans la démo.
 
+**Sans serveur, gratuitement :** l'aperçu cliquable `docs/index.html` contient les vraies pages de l'appli (espace du chauffagiste, formulaire en français et en néerlandais, mini-site, formules), figées. Il est publié gratuitement par GitHub Pages à l'adresse **`https://romaindoumit-ai.github.io/chauffpro/`** (à activer une seule fois : *Settings › Pages › Deploy from a branch › main › /docs*). Pour le mettre à jour après un changement dans l'appli : `npm run apercu`, puis enregistrez le fichier `docs/index.html` dans le dépôt.
+
 Pour un compte de démonstration permanent (par exemple pour un rendez-vous), lancez `npm run demo` : il crée `demo@chauffpro.fr` / `demo1234`, qui n'envoie rien non plus.
 
 ## 5. Belgique et France

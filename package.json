@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/server.js",
     "demo": "node --env-file-if-exists=.env scripts/demo.js",
+    "apercu": "node scripts/apercu.js",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
