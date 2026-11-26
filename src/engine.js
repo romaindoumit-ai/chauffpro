@@ -275,7 +275,7 @@ function monthlyReports(db, at = now()) {
   if (p.d !== 1 || p.h < 9) return 0;
   const ym = currentMonth(at), prev = prevMonth(ym);
   let n = 0;
-  for (const a of db.prepare(`SELECT * FROM accounts WHERE active=1 AND is_admin=0 AND (last_report_month IS NULL OR last_report_month<>?)`).all(ym)) {
+  for (const a of db.prepare(`SELECT * FROM accounts WHERE active=1 AND is_admin=0 AND COALESCE(is_demo,0)=0 AND (last_report_month IS NULL OR last_report_month<>?)`).all(ym)) {
     db.prepare('UPDATE accounts SET last_report_month=? WHERE id=?').run(ym, a.id);
     if (!settingsOf(a).rapport.enabled || !a.email) continue;
     const [f, t] = monthRange(prev);
@@ -295,6 +295,8 @@ async function processDue(db, at = now()) {
   let n = 0;
   try {
     monthlyReports(db, at);
+    // Les comptes de démonstration disparaissent au bout de 24 h.
+    db.prepare('DELETE FROM accounts WHERE is_demo=1 AND created_at<=?').run(U.iso(U.addHours(at, -24)));
     const due = db.prepare(`SELECT * FROM messages WHERE status='en_attente' AND scheduled_at<=? ORDER BY scheduled_at LIMIT 100`).all(U.iso(at));
     for (const m of due) {
       const account = db.prepare('SELECT * FROM accounts WHERE id=?').get(m.account_id);
@@ -309,7 +311,8 @@ async function processDue(db, at = now()) {
         if (!U.inWindow(at, s.window)) { db.prepare('UPDATE messages SET scheduled_at=? WHERE id=?').run(U.iso(U.nextAllowed(at, s.window)), m.id); continue; }
       }
       try {
-        const res = m.channel === 'sms' ? await providers.sendSms(account, m.to_addr, m.body, { marketing: /^(relance|avis)/.test(m.kind) })
+        const res = account.is_demo ? { simulated: true } // un compte démo n'envoie jamais rien pour de vrai
+          : m.channel === 'sms' ? await providers.sendSms(account, m.to_addr, m.body, { marketing: /^(relance|avis)/.test(m.kind) })
           : await providers.sendEmail(account, { to: m.to_addr, subject: m.subject, html: m.html || `<pre>${U.esc(m.body)}</pre>`, text: m.body });
         db.prepare('UPDATE messages SET status=?, sent_at=?, provider_id=? WHERE id=?').run(res.simulated ? 'simule' : 'envoye', U.iso(at), res.id || null, m.id);
         if (lead && m.kind !== 'notif') logEvent(db, account.id, lead.id, 'message', `${KINDS[m.kind] || m.kind} (${m.channel === 'sms' ? 'SMS' : 'e-mail'})${res.simulated ? ' [simulation]' : ''}`);

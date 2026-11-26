@@ -256,6 +256,7 @@ ${Object.keys(T).filter((k) => k !== 'appel_vocal').map((k) => tpl(k, k.replace(
     back(res, '/app/reglages', 'Réglages enregistrés.');
   });
   r.post('/mot-de-passe', (req, res) => {
+    if (req.account.is_demo) return res.redirect('/app/reglages?err=' + encodeURIComponent('Pas de mot de passe sur un compte de démonstration.'));
     if (String(req.body.password || '').length < 8) return res.redirect('/app/reglages?err=' + encodeURIComponent('8 caractères minimum.'));
     db.prepare('UPDATE accounts SET password_hash=? WHERE id=?').run(U.hashPassword(req.body.password), req.account.id);
     back(res, '/app/reglages', 'Mot de passe modifié.');

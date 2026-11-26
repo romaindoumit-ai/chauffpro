@@ -96,7 +96,7 @@ function migrate(db) {
   );
   `);
   // Colonnes ajoutées après la première version (les bases existantes sont mises à jour automatiquement).
-  addColumns(db, 'accounts', { country: "TEXT DEFAULT 'BE'" });
+  addColumns(db, 'accounts', { country: "TEXT DEFAULT 'BE'", is_demo: 'INTEGER DEFAULT 0' });
 }
 
 function addColumns(db, table, cols) {

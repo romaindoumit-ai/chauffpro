@@ -9,9 +9,9 @@ module.exports = (db) => {
   const r = express.Router();
   r.get('/', (req, res) => {
     const ym = E.currentMonth(); const [f, t] = E.monthRange(ym);
-    const accounts = db.prepare('SELECT * FROM accounts WHERE is_admin=0 ORDER BY created_at DESC').all();
+    const accounts = db.prepare('SELECT * FROM accounts WHERE is_admin=0 AND COALESCE(is_demo,0)=0 ORDER BY created_at DESC').all();
     const mrr = accounts.filter((a) => a.active).reduce((s, a) => s + (a.monthly_price || 0), 0);
-    const sent = db.prepare(`SELECT channel, COUNT(*) n FROM messages WHERE status IN ('envoye','simule') AND sent_at>=? AND sent_at<? AND kind<>'notif' GROUP BY channel`).all(U.iso(f), U.iso(t));
+    const sent = db.prepare(`SELECT channel, COUNT(*) n FROM messages WHERE status IN ('envoye','simule') AND sent_at>=? AND sent_at<? AND kind<>'notif' AND account_id NOT IN (SELECT id FROM accounts WHERE is_demo<>0) GROUP BY channel`).all(U.iso(f), U.iso(t));
     const sms = sent.find((x) => x.channel === 'sms')?.n || 0, mails = sent.find((x) => x.channel === 'email')?.n || 0;
     const fails = db.prepare(`SELECT COUNT(*) n FROM messages WHERE status='echec' AND created_at>=?`).get(U.iso(U.addDays(new Date(), -7))).n;
     const rows = accounts.map((a) => {

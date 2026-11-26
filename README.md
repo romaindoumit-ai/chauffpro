@@ -68,7 +68,14 @@ Les délais (J+2, J+7, J+14…), les canaux (SMS et/ou e-mail) et **tous les tex
 
 ## 4. Montrer l'outil à un prospect
 
-En local, ou sur une deuxième instance Render de démonstration, lancez `npm run demo`. Cela crée le compte `demo@chauffpro.fr` / `demo1234`. On y trouve 7 clients fictifs à tous les stades, des relances déjà parties, un appel manqué et un bilan du mois.
+Envoyez-lui simplement le lien **`https://app.chauffpro.fr/demo`** (ou cliquez sur « Voir la démo » sous l'écran de connexion).
+
+- Chaque visiteur reçoit **son propre compte fictif** : un chauffagiste bruxellois avec 8 clients à tous les stades, des relances déjà parties, un appel manqué et un client à rappeler.
+- Il peut tout essayer. **Aucun SMS ni e-mail n'est envoyé**, même quand la clé Brevo est configurée.
+- Le compte s'efface tout seul après 24 heures. Les démos n'apparaissent pas dans votre administration.
+- *(Optionnel)* Mettez dans la variable `CONTACT_URL` un lien vers vous (par exemple `https://wa.me/32470123456` ou `mailto:vous@chauffpro.be`) : un bouton « Je veux ChauffPro » s'affiche alors dans la démo.
+
+Pour un compte de démonstration permanent (par exemple pour un rendez-vous), lancez `npm run demo` : il crée `demo@chauffpro.fr` / `demo1234`, qui n'envoie rien non plus.
 
 ## 5. Belgique et France
 

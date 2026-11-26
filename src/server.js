@@ -22,7 +22,7 @@ function createApp(db) {
   app.get('/', (req, res) => res.redirect(req.account ? (req.account.is_admin ? '/admin' : '/app') : '/connexion'));
 
   const loginPage = (err = '') => publicLayout(`Connexion · ${APP_NAME()}`, `<div class="card" style="max-width:420px;margin:40px auto"><h1>${U.esc(APP_NAME())}</h1><p class="muted">Espace artisan</p>
-${err ? `<div class="flash err">${U.esc(err)}</div>` : ''}<form method="post" action="/connexion"><label>E-mail</label><input name="email" type="email" required autofocus><label>Mot de passe</label><input name="password" type="password" required><p><button class="btn" style="width:100%">Se connecter</button></p></form></div>`);
+${err ? `<div class="flash err">${U.esc(err)}</div>` : ''}<form method="post" action="/connexion"><label>E-mail</label><input name="email" type="email" required autofocus><label>Mot de passe</label><input name="password" type="password" required><p><button class="btn" style="width:100%">Se connecter</button></p></form><p class="small muted" style="text-align:center">Pas encore client ? <a href="/demo">Voir la démo</a></p></div>`);
   app.get('/connexion', (req, res) => res.send(loginPage()));
   const attempts = new Map();
   app.post('/connexion', (req, res) => {
@@ -34,6 +34,22 @@ ${err ? `<div class="flash err">${U.esc(err)}</div>` : ''}<form method="post" ac
     if (!a.active) return res.status(403).send(loginPage('Compte suspendu. Contactez votre prestataire.'));
     A.createSession(db, res, a.id);
     res.redirect(a.is_admin ? '/admin' : '/app');
+  });
+  // ---- Démo en ligne : chaque visiteur reçoit son propre compte fictif (effacé après 24 h) ----
+  const demoHits = new Map();
+  app.get('/demo', (req, res) => res.send(publicLayout(`Démo · ${APP_NAME()}`, `<div class="card" style="max-width:560px;margin:40px auto"><h1>Essayez ${U.esc(APP_NAME())}</h1>
+<p>Découvrez l'espace d'un chauffagiste bruxellois fictif, <b>Dupont Chauffage</b> : demandes reçues, devis relancés automatiquement, avis Google, appels manqués et bilan du mois.</p>
+<p class="muted small">Les clients sont fictifs, aucun SMS ni e-mail n'est envoyé. Votre compte de démonstration s'efface tout seul après 24 heures.</p>
+<form method="post" action="/demo"><button class="btn" style="width:100%">Ouvrir la démo</button></form></div>`)));
+  app.post('/demo', async (req, res, next) => {
+    try {
+      const t = Date.now(), arr = (demoHits.get(req.ip) || []).filter((x) => t - x < 3600000);
+      if (arr.length >= 10) return res.status(429).send(publicLayout('Démo', '<div class="card">Trop de démos ouvertes depuis votre connexion. Réessayez dans une heure.</div>'));
+      arr.push(t); demoHits.set(req.ip, arr);
+      const a = await require('./demo').createDemoAccount(db);
+      A.createSession(db, res, a.id);
+      res.redirect('/app');
+    } catch (e) { next(e); }
   });
   app.post('/deconnexion', (req, res) => { A.destroySession(db, req, res); res.redirect('/connexion'); });
 

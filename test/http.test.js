@@ -64,3 +64,32 @@ test('parcours complet : admin crée un artisan belge, un client remplit le form
   }
   assert.match((await s.req('/app/reglages')).text, /N° d'entreprise \(BCE\)/);
 });
+
+test('démo en ligne : un compte fictif par visiteur, rien de réel envoyé, effacé après 24 h', async (t) => {
+  const s = await boot();
+  t.after(() => s.server.close());
+  let r = await s.req('/demo');
+  assert.match(r.text, /Ouvrir la démo/);
+  r = await s.req('/demo', { method: 'POST' });
+  assert.equal(r.location, '/app');
+  r = await s.req('/app');
+  assert.match(r.text, /Compte de démonstration/);
+  assert.match(r.text, /Julie Lefèvre/);
+  const a = s.db.prepare('SELECT * FROM accounts WHERE is_demo=1').get();
+  assert.ok(s.db.prepare("SELECT COUNT(*) n FROM leads WHERE account_id=?").get(a.id).n >= 8);
+  // Même avec une vraie clé Brevo, un compte démo n'envoie rien.
+  process.env.BREVO_API_KEY = 'fausse-cle';
+  try {
+    const E = require('../src/engine');
+    const lead = s.db.prepare("SELECT * FROM leads WHERE account_id=? AND status='nouveau'").get(a.id);
+    const id = E.schedule(s.db, a, lead, 'confirmation', 'sms', new Date(), { respectWindow: false });
+    await E.processDue(s.db);
+    assert.equal(s.db.prepare('SELECT status FROM messages WHERE id=?').get(id).status, 'simule');
+  } finally { delete process.env.BREVO_API_KEY; }
+  // 2 jours plus tard, le compte a été effacé
+  await require('../src/engine').processDue(s.db, new Date(Date.now() + 2 * 86400000));
+  assert.equal(s.db.prepare('SELECT COUNT(*) n FROM accounts WHERE is_demo=1').get().n, 0);
+  // Les démos n'apparaissent pas dans l'administration
+  await s.login('admin@test.be', 'admin-secret');
+  assert.doesNotMatch((await s.req('/admin')).text, /Dupont Chauffage/);
+});
