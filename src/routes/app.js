@@ -110,6 +110,7 @@ ${l.opt_out_sms || l.opt_out_email ? `<div class="banner">Ce client s'est désin
 <div style="flex:0 0 auto"><button class="btn">${l.status === 'devis_envoye' ? 'Relancer à nouveau' : "J'ai envoyé le devis"}</button></div></form>
 <p class="small muted">Relances automatiques à J+${E.settingsOf(req.account).relances.days.join(', J+')} tant que le client n'a pas répondu.</p>
 <div class="actions">${act('rdv', '📅 Visite prévue')}${act('accepte', '✔ Devis signé', 'ok')}${act('termine', '🏁 Chantier terminé → demander un avis')}${act('refuse', 'Refusé')}${act('perdu', 'Sans suite')}${l.status !== 'nouveau' ? act('nouveau', 'Remettre en « nouvelle »') : ''}</div></div>
+${aiCard(req, l)}
 ${visitCard(req.account, l)}
 <div class="card" style="margin-top:14px"><h3>Coordonnées</h3><form method="post" action="/app/demandes/${l.id}/modifier">
 <div class="row">${f('first_name', 'Prénom')}${f('last_name', 'Nom')}</div><div class="row">${f('phone', 'Mobile')}${f('email', 'E-mail', 'email')}</div>
@@ -160,6 +161,50 @@ ${opts.length ? `<form method="post" action="/app/demandes/${l.id}/visite" class
 <p class="small muted">Le client reçoit une confirmation avec la date, puis un rappel par SMS la veille.</p>` : '<p class="small muted">Aucun créneau libre : vérifiez vos créneaux de visite dans Réglages.</p>'}
 ${l.visit_at && !past ? `<form method="post" action="/app/demandes/${l.id}/visite"><input type="hidden" name="visit" value=""><button class="btn sm sec">Annuler la visite</button></form>` : ''}</div>`;
   }
+  // ---------- Assistant IA (facultatif) ----------
+  const AI = require('../ai');
+  function aiCard(req, l) {
+    if (!AI.enabled()) return '';
+    const sms = l.phone ? `sms:${l.phone}?&body=` : '';
+    return `<div class="card ai" style="margin-top:14px"><h3>✨ Assistant IA</h3>
+${l.ai_summary ? `<div class="ai-out">${U.esc(l.ai_summary)}</div>` : ''}<form method="post" action="/app/demandes/${l.id}/ia/resume" style="margin-top:6px"><button class="btn sm sec">${l.ai_summary ? '↻ Refaire le résumé' : 'Résumer cette demande'}</button></form>
+<form method="post" action="/app/demandes/${l.id}/ia/reponse" style="margin-top:10px"><label>Rédiger un message au client</label>
+<input name="instruction" placeholder="Facultatif : ce que vous voulez dire (ex. proposer jeudi matin, le devis est prêt…)">
+<div class="row" style="margin-top:6px">${l.phone ? '<button class="btn sm" name="channel" value="sms" style="flex:0 0 auto">Brouillon de SMS</button>' : ''}${l.email ? '<button class="btn sm sec" name="channel" value="email" style="flex:0 0 auto">Brouillon d\'e-mail</button>' : ''}</div></form>
+${l.ai_draft ? `<label>Brouillon (modifiable)</label><textarea id="draft" rows="6">${U.esc(l.ai_draft)}</textarea>
+<div class="row">${sms ? `<a class="btn sm" style="flex:0 0 auto" href="#" onclick="location.href='${sms}'+encodeURIComponent(document.getElementById('draft').value);return false">Envoyer par SMS</a>` : ''}${l.email ? `<a class="btn sm sec" style="flex:0 0 auto" href="#" onclick="location.href='mailto:${U.esc(l.email)}?subject='+encodeURIComponent(${U.esc(JSON.stringify(req.account.company_name))})+'&body='+encodeURIComponent(document.getElementById('draft').value);return false">Envoyer par e-mail</a>` : ''}<button type="button" class="btn sm grey" style="flex:0 0 auto" onclick="navigator.clipboard.writeText(document.getElementById('draft').value);this.textContent='Copié ✓'">Copier</button></div>` : ''}
+<p class="small muted">L'IA propose, vous relisez : rien n'est envoyé sans vous.</p></div>`;
+  }
+  const aiRun = (fn) => async (req, res, next) => {
+    const l = lead(req); if (!l) return res.redirect('/app/demandes');
+    try { await fn(req, l); back(res, `/app/demandes/${l.id}`, 'Voici la proposition de l\'assistant.'); } catch (e) {
+      if (!(e instanceof AI.AiError)) return next(e);
+      res.redirect(`/app/demandes/${l.id}?err=${encodeURIComponent(e.message)}`);
+    }
+  };
+  r.post('/demandes/:id/ia/resume', aiRun(async (req, l) => E.updateLead(db, l.id, { ai_summary: await AI.summarize(db, req.account, l) })));
+  r.post('/demandes/:id/ia/reponse', aiRun(async (req, l) => E.updateLead(db, l.id, { ai_draft: await AI.draftReply(db, req.account, l, { channel: req.body.channel === 'email' ? 'email' : 'sms', instruction: req.body.instruction || '' }) })));
+
+  const avisPage = (req, { values = {}, reply = '', error = '' } = {}) => appLayout(req, 'Répondre aux avis', `<h1>✨ Répondre à un avis Google</h1>
+<p class="muted">Répondre à chaque avis, même court, améliore votre place sur Google Maps. Collez l'avis, l'assistant vous propose une réponse.</p>
+${error ? `<div class="flash err">${U.esc(error)}</div>` : ''}
+<div class="grid g2"><div class="card"><form method="post" action="/app/avis-google">
+<div class="row"><div><label>Note</label><select name="stars">${[5, 4, 3, 2, 1].map((n) => `<option value="${n}" ${String(values.stars || 5) === String(n) ? 'selected' : ''}>${'★'.repeat(n)}${'☆'.repeat(5 - n)}</option>`).join('')}</select></div><div><label>Prénom du client (facultatif)</label><input name="author" value="${U.esc(values.author || '')}"></div></div>
+<label>Texte de l'avis</label><textarea name="review" rows="6" placeholder="Collez ici le texte de l'avis…">${U.esc(values.review || '')}</textarea>
+<p><button class="btn">Proposer une réponse</button></p></form></div>
+<div class="card"><h3>Réponse proposée</h3>${reply ? `<textarea id="draft" rows="8">${U.esc(reply)}</textarea><p class="row"><button type="button" class="btn sm" style="flex:0 0 auto" onclick="navigator.clipboard.writeText(document.getElementById('draft').value);this.textContent='Copié ✓'">Copier</button></p><p class="small muted">Collez-la ensuite dans Google Business Profile › Avis › Répondre.</p>` : '<p class="muted small">La réponse apparaîtra ici.</p>'}</div></div>`, 'avis');
+  r.get('/avis-google', (req, res) => {
+    if (!AI.enabled()) return res.redirect('/app');
+    res.send(avisPage(req));
+  });
+  r.post('/avis-google', async (req, res, next) => {
+    if (!AI.enabled()) return res.redirect('/app');
+    try { res.send(avisPage(req, { values: req.body, reply: await AI.reviewReply(db, req.account, req.body) })); } catch (e) {
+      if (!(e instanceof AI.AiError)) return next(e);
+      res.send(avisPage(req, { values: req.body, error: e.message }));
+    }
+  });
+
   r.post('/demandes/:id/visite', (req, res) => {
     const l = lead(req); if (!l) return res.redirect('/app/demandes');
     const iso = String(req.body.visit || '');

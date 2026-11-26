@@ -11,6 +11,7 @@ Une seule application web, avec un compte par artisan. Elle regroupe tout ce que
 | **Rappel d'entretien** | Rien à faire : il part tout seul 12 mois après « Chantier terminé » (délai réglable), puis chaque année. Pour un ancien client, « Ajouter » avec la date du dernier passage. | Un SMS et un e-mail avec un lien pour choisir un jour et un créneau. Sa demande arrive comme une nouvelle fiche. |
 | **Appels manqués** | Une alerte « appel manqué » et une fiche créée automatiquement | Un SMS immédiat avec un lien pour demander un rendez-vous ou être rappelé |
 | **Appli sur le téléphone** | ChauffPro s'installe sur l'écran d'accueil (Android et iPhone) et envoie une **notification** à chaque nouvelle demande, appel manqué, devis accepté ou client à rappeler. Page « Appli & notifications ». Aucune clé à créer. | – |
+| **Assistant IA** *(option)* | Sur chaque fiche : « Résumer cette demande » et « Brouillon de SMS / d'e-mail » à relire avant d'envoyer. Page « Répondre aux avis » : on colle un avis Google, l'IA propose une réponse. | – |
 | **Mini-site vitrine** | Un site prêt à l'emploi (`/s/nom-artisan`) avec le formulaire intégré | Un site propre, mobile, avec un bouton d'appel |
 | **Bilan mensuel** | Envoyé automatiquement le 1er du mois : demandes, devis relancés, devis signés, chiffre d'affaires signé après relance, avis | – |
 
@@ -29,6 +30,16 @@ Les délais (J+2, J+7, J+14…), les canaux (SMS et/ou e-mail) et **tous les tex
    - SMS : prépayés, environ 4 à 5 centimes l'unité en France. Comptez environ 150 SMS par mois pour un artisan actif, soit 6 à 8 € : c'est largement couvert par vos 99 €.
 4. **Un nom de domaine**, environ 10 € par an chez OVH ou Gandi, par exemple `chauffpro.fr`. Il sert à l'adresse de l'application (`app.chauffpro.fr`) et à l'adresse d'envoi des e-mails.
 5. *(Optionnel)* **Un compte [Twilio](https://www.twilio.com)** si vous voulez la version « message vocal + SMS » des appels manqués. Il faut alors un numéro Twilio par artisan, à environ 1 à 3 € par mois.
+
+## Option : l'assistant IA
+
+L'assistant est **désactivé** tant que la variable `ANTHROPIC_API_KEY` est vide : aucun bouton IA n'apparaît.
+
+1. Créez un compte sur [console.anthropic.com](https://console.anthropic.com), ajoutez quelques euros de crédit et créez une clé API.
+2. Dans Render, mettez cette clé dans `ANTHROPIC_API_KEY`. Ne la mettez **jamais** dans le code ni sur GitHub.
+3. Coût : environ 1 centime par utilisation. Chaque artisan est limité à 40 utilisations par jour (`AI_DAILY_LIMIT`), chaque démo à 6.
+
+L'IA ne fait que proposer des textes : rien n'est envoyé au client sans que l'artisan ait relu et cliqué.
 
 ## 2. Mise en ligne (une seule fois, environ 30 minutes)
 

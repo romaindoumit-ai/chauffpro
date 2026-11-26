@@ -188,3 +188,43 @@ test('le client réserve un créneau de visite dans le formulaire ; le créneau 
   assert.equal(s.db.prepare("SELECT COUNT(*) n FROM messages WHERE kind='rappel_visite' AND status='en_attente'").get().n <= 1, true);
   assert.match((await s.req('/app')).text, /Prochaines visites/);
 });
+
+test("assistant IA : invisible sans clé, résumé et brouillons avec clé, limite par jour", async (t) => {
+  const AI = require('../src/ai');
+  const s = await boot();
+  t.after(() => { s.server.close(); AI._client = null; });
+  await s.login('admin@test.be', 'admin-secret');
+  let r = await s.req('/admin/comptes', { method: 'POST', form: { company_name: 'Chauffage Dubois', email: 'dubois@test.be', country: 'BE' } });
+  const pw = new URL(r.location, s.base).searchParams.get('pw');
+  s.resetCookie();
+  await s.req('/f/chauffage-dubois', { method: 'POST', form: { work_type: 'Remplacement de chaudière', first_name: 'Lotte', phone: '0478 12 34 56', email: 'lotte@x.be', postal_code: '1050', consent: '1', message: 'Ma chaudière Vaillant fait du bruit' } });
+  const lead = s.db.prepare('SELECT * FROM leads').get();
+  await s.login('dubois@test.be', pw);
+  r = await s.req(`/app/demandes/${lead.id}`);
+  assert.doesNotMatch(r.text, /Assistant IA/); // pas de clé : rien ne s'affiche
+  // Avec une clé (client simulé)
+  const calls = [];
+  AI._client = { beta: { messages: { create: async (p) => { calls.push(p); return { stop_reason: 'end_turn', content: [{ type: 'text', text: '• Remplacement de chaudière, normal\n• À vérifier : modèle exact' }] }; } } } };
+  r = await s.req(`/app/demandes/${lead.id}`);
+  assert.match(r.text, /Assistant IA/);
+  await s.req(`/app/demandes/${lead.id}/ia/resume`, { method: 'POST', form: {} });
+  assert.match(s.db.prepare('SELECT ai_summary FROM leads').get().ai_summary, /chaudière/);
+  assert.equal(calls[0].model, 'claude-opus-5-5');
+  assert.match(calls[0].messages[0].content, /Vaillant/);
+  assert.match(calls[0].messages[0].content, /<client>/);
+  await s.req(`/app/demandes/${lead.id}/ia/reponse`, { method: 'POST', form: { channel: 'sms', instruction: 'proposer jeudi matin' } });
+  assert.match(calls[1].messages[0].content, /proposer jeudi matin/);
+  r = await s.req('/app/avis-google', { method: 'POST', form: { stars: '2', review: 'Arrivé en retard' } });
+  assert.match(r.text, /Réponse proposée/);
+  assert.match(calls[2].messages[0].content, /2 étoile/);
+  // Refus du modèle -> message clair, pas de plantage
+  AI._client.beta.messages.create = async () => ({ stop_reason: 'refusal', content: [] });
+  r = await s.req(`/app/demandes/${lead.id}/ia/resume`, { method: 'POST', form: {} });
+  assert.match(decodeURIComponent(r.location), /err=L'assistant IA n'a pas pu/);
+  // Limite quotidienne
+  process.env.AI_DAILY_LIMIT = '4';
+  try {
+    r = await s.req(`/app/demandes/${lead.id}/ia/resume`, { method: 'POST', form: {} });
+    assert.match(decodeURIComponent(r.location), /Limite de 4/);
+  } finally { delete process.env.AI_DAILY_LIMIT; }
+});

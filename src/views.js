@@ -12,7 +12,7 @@ const APP_NAME = () => process.env.APP_NAME || 'ChauffPro';
 function appLayout(req, title, body, active = '') {
   const a = req.account;
   const nav = [['/app', 'Tableau de bord', 'home'], ['/app/demandes', 'Demandes & devis', 'demandes'], ['/app/messages', 'Messages programmés', 'messages'],
-    ['/app/rapport', 'Bilan mensuel', 'rapport'], ['/app/integration', 'Formulaire, site & appels', 'integration'], ['/app/appli', 'Appli & notifications', 'appli'], ['/app/reglages', 'Réglages', 'reglages']];
+    ['/app/rapport', 'Bilan mensuel', 'rapport'], ['/app/integration', 'Formulaire, site & appels', 'integration'], ...(require('./ai').enabled() ? [['/app/avis-google', '✨ Répondre aux avis', 'avis']] : []), ['/app/appli', 'Appli & notifications', 'appli'], ['/app/reglages', 'Réglages', 'reglages']];
   if (a.is_admin || req.adminId) nav.push(['/admin', 'Administration', 'admin']);
   const imp = req.adminId && req.adminId !== a.id ? `<div class="banner info">Vous êtes connecté en tant que <b>${esc(a.company_name)}</b>. <form method="post" action="/admin/retour"><button class="btn sm sec">Revenir à l'administration</button></form></div>` : '';
   const sim = req.simulation && !a.is_demo ? `<div class="banner">Mode simulation : aucun SMS ni e-mail réel n'est envoyé tant que la clé Brevo n'est pas configurée. Tout est quand même enregistré ici.</div>` : '';

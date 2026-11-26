@@ -23,6 +23,8 @@ services:
         sync: false
       - key: EMAIL_FROM
         sync: false          # ex. notifications@votredomaine.fr (domaine validé dans Brevo)
+      - key: ANTHROPIC_API_KEY
+        sync: false          # facultatif : active l'assistant IA (laisser vide = désactivé)
       - key: CONTACT_URL
         sync: false          # facultatif : lien « Je veux ChauffPro » affiché dans la démo (wa.me/…, mailto:…)
       - key: APP_NAME

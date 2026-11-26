@@ -90,6 +90,7 @@ function migrate(db) {
     admin_id INTEGER,
     expires_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS ai_usage (account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, task TEXT, created_at TEXT);
   CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT);
   CREATE TABLE IF NOT EXISTS push_subs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,7 +105,7 @@ function migrate(db) {
   `);
   // Colonnes ajoutées après la première version (les bases existantes sont mises à jour automatiquement).
   addColumns(db, 'accounts', { country: "TEXT DEFAULT 'BE'", is_demo: 'INTEGER DEFAULT 0' });
-  addColumns(db, 'leads', { visit_at: 'TEXT' }); // début du créneau de visite choisi (UTC)
+  addColumns(db, 'leads', { visit_at: 'TEXT', ai_summary: 'TEXT', ai_draft: 'TEXT' }); // début du créneau de visite choisi (UTC)
 }
 
 function addColumns(db, table, cols) {

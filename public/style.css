@@ -35,3 +35,4 @@ fieldset.visit{border:1px solid var(--line);border-radius:12px;padding:12px 14px
 .vslot span{display:inline-block;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;font-size:14px;font-weight:500}
 .vslot input:checked+span{background:var(--c);border-color:var(--c);color:#fff}.vslot input:focus-visible+span{outline:2px solid var(--c);outline-offset:2px}
 .vslot.none{margin-top:8px}.visit details summary{cursor:pointer;margin:6px 0;color:var(--c)}
+.card.ai{border-color:#d0bfff;background:linear-gradient(180deg,#f8f5ff,#fff 60px)}.ai-out{white-space:pre-wrap;background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:14px}
