@@ -2,11 +2,17 @@
 const U = require('./util');
 const { mergeSettings, KINDS, STATUSES } = require('./defaults');
 const providers = require('./providers');
+const V = require('./visits');
+const I = require('./i18n');
 
 const BASE = () => (process.env.BASE_URL || 'http://localhost:3000').replace(/\/$/, '');
 const now = () => new Date();
 
-function settingsOf(account) { return mergeSettings(account.settings); }
+function settingsOf(account) {
+  const s = mergeSettings(account.settings);
+  s.window.country = U.countryOf(account); // jours fériés du pays de l'artisan
+  return s;
+}
 
 function logEvent(db, accountId, leadId, type, detail = '') {
   db.prepare('INSERT INTO events (account_id, lead_id, type, detail, created_at) VALUES (?,?,?,?,?)').run(accountId, leadId ?? null, type, detail, U.iso(now()));
@@ -14,24 +20,27 @@ function logEvent(db, accountId, leadId, type, detail = '') {
 
 function varsFor(account, lead = {}) {
   const amount = lead.quote_amount ? U.euros(lead.quote_amount) : '';
+  const lang = lead.lang === 'nl' ? 'nl' : 'fr';
+  const nl = lang === 'nl' ? '&lang=nl' : '';
   return {
     prenom: lead.first_name || '', nom: lead.last_name || '',
     entreprise: account.company_name, artisan: (account.owner_name || account.company_name || '').split(' ')[0],
-    tel: U.displayPhone(account.phone), travaux: lead.work_type || 'vos travaux',
+    tel: U.displayPhone(account.phone), travaux: lead.work_type ? I.workLabel(lead.work_type, lang) : I.t(lang)('your_work'),
     ref: lead.quote_ref ? `n°${lead.quote_ref}` : '', montant: amount, montant_txt: amount ? `, ${amount}` : '',
     lien: lead.token ? `${BASE()}/c/${lead.token}` : '',
     lien_avis: lead.token ? `${BASE()}/avis/${lead.token}` : account.google_review_url || '',
-    lien_rdv: `${BASE()}/rdv/${account.slug}${lead.token ? `?l=${lead.token}` : ''}`,
+    lien_rdv: `${BASE()}/rdv/${account.slug}${lead.token ? `?l=${lead.token}${nl}` : ''}`,
+    visite: lead.visit_at ? V.label(lead.visit_at, account, lang) : '',
   };
 }
-const fill = (tpl, vars) => U.render(tpl, vars).replace(/Bonjour ,/g, 'Bonjour,').replace(/ +/g, ' ').replace(/ \./g, '.').trim();
+const fill = (tpl, vars) => U.render(tpl, vars).replace(/(Bonjour|Beste) ,/g, '$1,').replace(/ +/g, ' ').replace(/ \./g, '.').trim();
 
 function emailHtml(account, text, { buttons = [], lead } = {}) {
   const color = account.primary_color || '#d9480f';
   const paras = U.esc(text).split(/\n{2,}/).map((p) => `<p style="margin:0 0 14px">${p.replace(/\n/g, '<br>')}</p>`).join('');
   const btns = buttons.map((b) => `<a href="${U.esc(b.href)}" style="display:inline-block;margin:4px 6px 4px 0;padding:11px 18px;border-radius:8px;text-decoration:none;font-weight:600;${b.primary ? `background:${color};color:#fff` : `background:#f1f3f5;color:#212529`}">${U.esc(b.label)}</a>`).join('');
-  const unsub = lead && lead.token ? `<a href="${BASE()}/desinscription/${lead.token}" style="color:#868e96">Ne plus recevoir d'e-mails</a>` : '';
-  return `<!doctype html><html><body style="margin:0;background:#f8f9fa;font-family:Arial,Helvetica,sans-serif;color:#212529">
+  const unsub = lead && lead.token ? `<a href="${BASE()}/desinscription/${lead.token}" style="color:#868e96">${I.t(lead.lang)('e_unsub')}</a>` : '';
+  return `<!doctype html><html lang="${lead && lead.lang === 'nl' ? 'nl' : 'fr'}"><body style="margin:0;background:#f8f9fa;font-family:Arial,Helvetica,sans-serif;color:#212529">
 <div style="max-width:560px;margin:0 auto;padding:24px"><div style="background:#fff;border-radius:12px;padding:28px;border-top:5px solid ${color}">
 <div style="font-weight:700;font-size:18px;margin-bottom:18px">${U.esc(account.company_name)}</div>${paras}${btns ? `<div style="margin-top:8px">${btns}</div>` : ''}</div>
 <div style="font-size:12px;color:#868e96;text-align:center;margin-top:14px">${U.esc(account.company_name)}${account.address ? ' · ' + U.esc(account.address) : ''}<br>${unsub}</div></div></body></html>`;
@@ -49,14 +58,15 @@ function isOptedOut(db, lead, channel) {
 /** Programme un message. Renvoie l'id ou null si impossible (pas de contact, désinscrit…). */
 function schedule(db, account, lead, kind, channel, at, { tplKey, respectWindow = true, window } = {}) {
   const s = settingsOf(account);
-  const t = s.templates;
+  const t = lead.lang === 'nl' ? { ...s.templates, ...s.templates_nl } : s.templates; // clients néerlandophones
+  const tr = I.t(lead.lang);
   const vars = varsFor(account, lead);
   let to, body, subject = null, html = null;
   if (channel === 'sms') {
     to = lead.phone;
     if (!to || !U.isMobile(to) || isOptedOut(db, lead, 'sms')) return null;
     body = fill(t[`${tplKey || kind}_sms`], vars);
-    if (/^(relance|avis)/.test(kind) && s.sms_footer) body += ` ${s.sms_footer}`;
+    if (/^(relance|avis|entretien)/.test(kind) && s.sms_footer) body += ` ${s.sms_footer}`;
   } else {
     to = lead.email;
     if (!to || isOptedOut(db, lead, 'email')) return null;
@@ -65,15 +75,16 @@ function schedule(db, account, lead, kind, channel, at, { tplKey, respectWindow 
     subject = fill(t[`${key}_email_subject`], vars);
     let buttons = [];
     if (kind.startsWith('relance')) buttons = [
-      { label: '✔ J\'accepte le devis', href: `${vars.lien}?choix=ok`, primary: true },
-      { label: 'Rappelez-moi', href: `${vars.lien}?choix=rappel` },
-      { label: 'Je ne donne pas suite', href: `${vars.lien}?choix=non` },
+      { label: tr('e_ok'), href: `${vars.lien}?choix=ok`, primary: true },
+      { label: tr('e_rappel'), href: `${vars.lien}?choix=rappel` },
+      { label: tr('e_non'), href: `${vars.lien}?choix=non` },
     ];
-    if (kind.startsWith('avis')) buttons = [{ label: '⭐ Laisser un avis Google', href: vars.lien_avis, primary: true }];
+    if (kind.startsWith('avis')) buttons = [{ label: tr('e_avis'), href: vars.lien_avis, primary: true }];
+    if (kind === 'entretien') buttons = [{ label: tr('e_slot'), href: vars.lien_rdv, primary: true }];
     html = emailHtml(account, body, { buttons, lead });
   }
   let when = new Date(at);
-  if (respectWindow) when = U.nextAllowed(when, window || s.window);
+  if (respectWindow) when = U.nextAllowed(when, window ? { country: s.window.country, ...window } : s.window);
   const r = db.prepare(`INSERT INTO messages (account_id, lead_id, kind, channel, to_addr, subject, body, html, respect_window, scheduled_at, created_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(account.id, lead.id ?? null, kind, channel, to, subject, body, html, respectWindow ? 1 : 0, U.iso(when), U.iso(now()));
   return Number(r.lastInsertRowid);
@@ -90,28 +101,34 @@ function notifyArtisan(db, account, leadId, subject, text) {
   const link = leadId ? `${BASE()}/app/demandes/${leadId}` : `${BASE()}/app`;
   if (s.notif.email && account.email) ins.run(account.id, leadId, 'notif', 'email', account.email, subject, `${text}\n\nVoir la fiche : ${link}`, emailHtml(account, text, { buttons: [{ label: 'Ouvrir la fiche', href: link, primary: true }] }), U.iso(now()), U.iso(now()));
   if (s.notif.sms && U.isMobile(account.phone || '')) ins.run(account.id, leadId, 'notif', 'sms', account.phone, null, `${subject}. ${link}`.slice(0, 300), null, U.iso(now()), U.iso(now()));
+  // Notification sur le téléphone (appli installée), immédiate.
+  require('./push').notify(db, account, { title: subject, body: text.split('\n').slice(0, 3).join(' · '), url: leadId ? `/app/demandes/${leadId}` : '/app' }).catch(() => {});
 }
 
 function getLead(db, id) { return db.prepare('SELECT * FROM leads WHERE id=?').get(id); }
 
 function createLead(db, account, data, { source = 'formulaire', notify = true, confirm = true } = {}) {
-  const phone = U.normalizePhone(data.phone);
+  const phone = U.normalizePhone(data.phone, account.country);
   const email = (data.email || '').trim().toLowerCase();
-  const r = db.prepare(`INSERT INTO leads (account_id, first_name, last_name, phone, email, address, postal_code, city, work_type, message, preferred_slot, source, status, consent, token, created_at, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(account.id, (data.first_name || '').trim(), (data.last_name || '').trim(), phone, email,
+  const r = db.prepare(`INSERT INTO leads (account_id, first_name, last_name, phone, email, address, postal_code, city, work_type, message, preferred_slot, source, status, consent, token, created_at, updated_at, lang)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(account.id, (data.first_name || '').trim(), (data.last_name || '').trim(), phone, email,
     (data.address || '').trim(), (data.postal_code || '').trim(), (data.city || '').trim(), (data.work_type || '').trim(), (data.message || '').trim(),
-    (data.preferred_slot || '').trim(), source, data.status || 'nouveau', data.consent ? 1 : 0, U.token(), U.iso(now()), U.iso(now()));
+    (data.preferred_slot || '').trim(), source, data.visit_at ? 'rdv' : data.status || 'nouveau', data.consent ? 1 : 0, U.token(), U.iso(now()), U.iso(now()), data.lang === 'nl' ? 'nl' : 'fr');
+  if (data.visit_at) db.prepare('UPDATE leads SET visit_at=? WHERE id=?').run(data.visit_at, Number(r.lastInsertRowid));
   const lead = getLead(db, Number(r.lastInsertRowid));
-  logEvent(db, account.id, lead.id, 'creation', `Demande reçue (${source})`);
+  logEvent(db, account.id, lead.id, 'creation', `Demande reçue (${source})${lead.visit_at ? ` · visite réservée ${V.label(lead.visit_at, account)}` : ''}`);
   const s = settingsOf(account);
-  if (confirm && s.confirmation.enabled) {
+  if (lead.visit_at) {
+    // Visite réservée par le client : confirmation avec la date, puis rappel la veille.
+    if (confirm) scheduleVisitMessages(db, account, lead, { confirmNow: true });
+  } else if (confirm && s.confirmation.enabled) {
     if (s.confirmation.sms) schedule(db, account, lead, 'confirmation', 'sms', now(), { respectWindow: false });
     if (s.confirmation.email) schedule(db, account, lead, 'confirmation', 'email', now(), { respectWindow: false });
   }
   if (notify) {
     const who = [lead.first_name, lead.last_name].filter(Boolean).join(' ') || U.displayPhone(lead.phone) || lead.email;
-    notifyArtisan(db, account, lead.id, `Nouvelle demande : ${who}`,
-      `Nouvelle demande de ${who}${lead.city ? ' (' + lead.city + ')' : ''}.\nTravaux : ${lead.work_type || '-'}\nTél : ${U.displayPhone(lead.phone) || '-'}\nE-mail : ${lead.email || '-'}\n${lead.preferred_slot ? 'Disponibilités : ' + lead.preferred_slot + '\n' : ''}Message : ${lead.message || '-'}`);
+    notifyArtisan(db, account, lead.id, lead.visit_at ? `📅 Visite réservée : ${who}, ${V.label(lead.visit_at, account)}` : `Nouvelle demande : ${who}`,
+      `${lead.visit_at ? `Visite réservée : ${V.label(lead.visit_at, account)}\n` : ''}Nouvelle demande de ${who}${lead.city ? ' (' + lead.city + ')' : ''}.\nTravaux : ${lead.work_type || '-'}\nTél : ${U.displayPhone(lead.phone) || '-'}\nE-mail : ${lead.email || '-'}\n${lead.preferred_slot ? 'Disponibilités : ' + lead.preferred_slot + '\n' : ''}Message : ${lead.message || '-'}`);
   }
   return lead;
 }
@@ -154,6 +171,50 @@ function scheduleReview(db, account, lead, from = now()) {
   return n;
 }
 
+/** Messages liés à une visite : confirmation (si demandée) + rappel la veille vers 17 h. */
+function scheduleVisitMessages(db, account, lead, { confirmNow = false } = {}) {
+  cancelPending(db, lead.id, 'rappel_visite', 'visite modifiée');
+  cancelPending(db, lead.id, 'visite', 'visite modifiée');
+  if (!lead.visit_at) return;
+  const s = settingsOf(account);
+  if (confirmNow && s.confirmation.enabled) {
+    if (s.confirmation.sms) schedule(db, account, lead, 'visite', 'sms', now(), { respectWindow: false });
+    if (s.confirmation.email) schedule(db, account, lead, 'visite', 'email', now(), { respectWindow: false });
+  }
+  const v = U.parisParts(new Date(lead.visit_at));
+  const eve = U.parisParts(U.addDays(new Date(lead.visit_at), -1));
+  const at = V.localToUtc(eve.y, eve.m, eve.d, Math.min(17, s.window.end - 1));
+  if (at > U.addHours(now(), 2) && U.inWindow(at, s.window)) schedule(db, account, lead, 'rappel_visite', 'sms', at, { respectWindow: false });
+  return v;
+}
+
+/** L'artisan fixe, déplace ou annule une visite. */
+function setVisit(db, account, leadId, iso, { notifyClient = true } = {}) {
+  const lead = getLead(db, leadId);
+  if (!lead || lead.account_id !== account.id) throw new Error('Demande introuvable');
+  updateLead(db, leadId, { visit_at: iso || null, ...(iso && ['nouveau', 'rdv'].includes(lead.status) ? { status: 'rdv' } : {}) });
+  const fresh = getLead(db, leadId);
+  scheduleVisitMessages(db, account, fresh, { confirmNow: !!iso && notifyClient });
+  logEvent(db, account.id, leadId, 'visite', iso ? `Visite fixée : ${V.label(iso, account)}` : 'Visite annulée');
+  return fresh;
+}
+
+/** Rappel d'entretien N mois après le chantier (puis chaque année tant que le client ne se désinscrit pas). */
+function scheduleMaintenance(db, account, lead, from = now()) {
+  const s = settingsOf(account).entretien;
+  cancelPending(db, lead.id, 'entretien', 'replanifié');
+  if (!s.enabled || !(Number(s.months) > 0)) return 0;
+  // Un seul rappel en attente par client : on annule ceux d'anciennes fiches du même client.
+  const others = db.prepare(`SELECT id FROM leads WHERE account_id=? AND id<>? AND ((phone<>'' AND phone=?) OR (email<>'' AND email=?))`).all(account.id, lead.id, lead.phone || '-', lead.email || '-');
+  for (const o of others) cancelPending(db, o.id, 'entretien', 'remplacé par un chantier plus récent');
+  const at = addMonths(from, Number(s.months));
+  let n = 0;
+  if (s.sms && schedule(db, account, lead, 'entretien', 'sms', at)) n++;
+  if (s.email && schedule(db, account, lead, 'entretien', 'email', at)) n++;
+  return n;
+}
+function addMonths(d, n) { const x = new Date(d); x.setUTCMonth(x.getUTCMonth() + n); return x; }
+
 /** Changement de statut d'une demande : déclenche ou arrête les automatisations. */
 function setStatus(db, account, leadId, status, extra = {}) {
   const lead = getLead(db, leadId);
@@ -168,7 +229,11 @@ function setStatus(db, account, leadId, status, extra = {}) {
   let info = '';
   if (status === 'devis_envoye') info = `${scheduleRelances(db, account, fresh)} relance(s) programmée(s)`;
   else cancelPending(db, leadId, 'relance', 'statut changé');
-  if (status === 'termine') info = `${scheduleReview(db, account, fresh)} demande(s) d'avis programmée(s)`;
+  if (status === 'termine') {
+    info = `${scheduleReview(db, account, fresh)} demande(s) d'avis programmée(s)`;
+    const n = scheduleMaintenance(db, account, fresh);
+    if (n) info += ` · rappel d'entretien dans ${settingsOf(account).entretien.months} mois`;
+  }
   logEvent(db, account.id, leadId, 'statut', `Statut : ${(STATUSES[status] || { label: status }).label}${info ? ' · ' + info : ''}`);
   return getLead(db, leadId);
 }
@@ -194,7 +259,7 @@ function clientChoice(db, lead, choice) {
 /** Appel manqué : SMS immédiat avec lien de prise de RDV. */
 function missedCall(db, account, fromRaw) {
   const s = settingsOf(account);
-  const phone = U.normalizePhone(fromRaw);
+  const phone = U.normalizePhone(fromRaw, account.country);
   if (!phone) return { ok: false, reason: 'numéro invalide ou masqué' };
   if (!s.appel.enabled) return { ok: false, reason: 'option désactivée' };
   const recent = db.prepare(`SELECT 1 FROM messages WHERE account_id=? AND kind='appel' AND to_addr=? AND created_at > ? LIMIT 1`).get(account.id, phone, U.iso(U.addHours(now(), -24)));
@@ -248,7 +313,7 @@ function stats(db, accountId, from, to) {
     taux: devis ? Math.round((signes.n / devis) * 100) : 0,
   };
 }
-function monthRange(ym) { // 'AAAA-MM' -> bornes en heure de Paris (approx. via UTC+0 minuit local)
+function monthRange(ym) { // 'AAAA-MM' -> bornes en heure de Bruxelles/Paris (approx. via UTC+0 minuit local)
   const [y, m] = ym.split('-').map(Number);
   const start = new Date(Date.UTC(y, m - 1, 1)), end = new Date(Date.UTC(y, m, 1));
   const off = (d) => { const p = U.parisParts(d); return (p.h || 24) % 24; };
@@ -271,7 +336,7 @@ function monthlyReports(db, at = now()) {
   if (p.d !== 1 || p.h < 9) return 0;
   const ym = currentMonth(at), prev = prevMonth(ym);
   let n = 0;
-  for (const a of db.prepare(`SELECT * FROM accounts WHERE active=1 AND is_admin=0 AND (last_report_month IS NULL OR last_report_month<>?)`).all(ym)) {
+  for (const a of db.prepare(`SELECT * FROM accounts WHERE active=1 AND is_admin=0 AND COALESCE(is_demo,0)=0 AND (last_report_month IS NULL OR last_report_month<>?)`).all(ym)) {
     db.prepare('UPDATE accounts SET last_report_month=? WHERE id=?').run(ym, a.id);
     if (!settingsOf(a).rapport.enabled || !a.email) continue;
     const [f, t] = monthRange(prev);
@@ -291,8 +356,11 @@ async function processDue(db, at = now()) {
   let n = 0;
   try {
     monthlyReports(db, at);
+    // Les comptes de démonstration disparaissent au bout de 24 h.
+    db.prepare('DELETE FROM accounts WHERE is_demo=1 AND created_at<=?').run(U.iso(U.addHours(at, -24)));
     const due = db.prepare(`SELECT * FROM messages WHERE status='en_attente' AND scheduled_at<=? ORDER BY scheduled_at LIMIT 100`).all(U.iso(at));
     for (const m of due) {
+      if (db.prepare('SELECT status FROM messages WHERE id=?').get(m.id)?.status !== 'en_attente') continue; // annulé entre-temps
       const account = db.prepare('SELECT * FROM accounts WHERE id=?').get(m.account_id);
       const lead = m.lead_id ? getLead(db, m.lead_id) : null;
       const cancel = (why) => db.prepare(`UPDATE messages SET status='annule', error=? WHERE id=?`).run(why, m.id);
@@ -300,16 +368,20 @@ async function processDue(db, at = now()) {
       if (lead && m.kind !== 'notif' && isOptedOut(db, lead, m.channel)) { cancel('désinscrit'); continue; }
       if (lead && m.kind.startsWith('relance') && lead.status !== 'devis_envoye') { cancel('devis plus en attente'); continue; }
       if (lead && m.kind === 'avis_relance' && lead.review_clicked_at) { cancel('avis déjà cliqué'); continue; }
+      if (lead && m.kind === 'rappel_visite' && (!lead.visit_at || new Date(lead.visit_at) <= at || ['refuse', 'perdu'].includes(lead.status))) { cancel('visite passée ou annulée'); continue; }
       if (m.respect_window) {
         const s = settingsOf(account);
         if (!U.inWindow(at, s.window)) { db.prepare('UPDATE messages SET scheduled_at=? WHERE id=?').run(U.iso(U.nextAllowed(at, s.window)), m.id); continue; }
       }
       try {
-        const res = m.channel === 'sms' ? await providers.sendSms(account, m.to_addr, m.body, { marketing: /^(relance|avis)/.test(m.kind) })
+        const res = account.is_demo ? { simulated: true } // un compte démo n'envoie jamais rien pour de vrai
+          : m.channel === 'sms' ? await providers.sendSms(account, m.to_addr, m.body, { marketing: /^(relance|avis|entretien)/.test(m.kind) })
           : await providers.sendEmail(account, { to: m.to_addr, subject: m.subject, html: m.html || `<pre>${U.esc(m.body)}</pre>`, text: m.body });
         db.prepare('UPDATE messages SET status=?, sent_at=?, provider_id=? WHERE id=?').run(res.simulated ? 'simule' : 'envoye', U.iso(at), res.id || null, m.id);
         if (lead && m.kind !== 'notif') logEvent(db, account.id, lead.id, 'message', `${KINDS[m.kind] || m.kind} (${m.channel === 'sms' ? 'SMS' : 'e-mail'})${res.simulated ? ' [simulation]' : ''}`);
         n++;
+        // Rappel d'entretien envoyé : on programme celui de l'année suivante (une fois par client).
+        if (lead && m.kind === 'entretien' && !db.prepare(`SELECT 1 FROM messages WHERE lead_id=? AND kind='entretien' AND status='en_attente'`).get(lead.id)) scheduleMaintenance(db, account, getLead(db, lead.id), at);
       } catch (e) {
         db.prepare(`UPDATE messages SET status='echec', error=? WHERE id=?`).run(String(e.message).slice(0, 500), m.id);
         if (lead) logEvent(db, account.id, lead.id, 'erreur', `Échec d'envoi ${m.channel} : ${e.message}`.slice(0, 300));
@@ -325,4 +397,4 @@ function startScheduler(db, everyMs = 60000) {
   return setInterval(tick, everyMs);
 }
 
-module.exports = { createLead, setStatus, clientChoice, missedCall, optOutPhone, optOutEmail, processDue, startScheduler, stats, monthRange, currentMonth, prevMonth, monthLabel, reportText, monthlyReports, logEvent, updateLead, getLead, settingsOf, schedule, varsFor, fill, emailHtml, BASE };
+module.exports = { setVisit, scheduleVisitMessages, notifyArtisan, createLead, setStatus, scheduleMaintenance, addMonths, clientChoice, missedCall, optOutPhone, optOutEmail, processDue, startScheduler, stats, monthRange, currentMonth, prevMonth, monthLabel, reportText, monthlyReports, logEvent, updateLead, getLead, settingsOf, schedule, varsFor, fill, emailHtml, BASE };

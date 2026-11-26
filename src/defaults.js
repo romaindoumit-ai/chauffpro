@@ -4,6 +4,9 @@ const DEFAULT_SETTINGS = {
   relances: { enabled: true, days: [2, 7, 14], sms: true, email: true },
   avis: { enabled: true, delay_hours: 3, reminder_days: 4, sms: true, email: true },
   appel: { enabled: true },
+  // Créneaux de visite proposés dans le formulaire (jours : lun mar mer jeu ven sam dim)
+  visites: { enabled: true, days: ['lun', 'mar', 'mer', 'jeu', 'ven'], slots: '8h-10h, 10h-12h, 13h-15h, 15h-17h', per_slot: 1, min_hours: 18, horizon_days: 14, closed_from: '', closed_to: '' },
+  entretien: { enabled: true, months: 12, sms: true, email: true }, // rappel d'entretien après « Chantier terminé »
   confirmation: { enabled: true, sms: true, email: true },
   notif: { email: true, sms: false },
   rapport: { enabled: true },
@@ -30,9 +33,45 @@ const DEFAULT_SETTINGS = {
     avis_email: "Bonjour {prenom},\n\nMerci d'avoir fait appel à {entreprise} pour votre {travaux}.\nSi vous êtes satisfait de notre travail, pourriez-vous prendre une minute pour laisser un avis Google ? Cela aide énormément une entreprise locale comme la nôtre.\n\nMerci beaucoup,\n{artisan}",
     avis_relance_sms: "Bonjour {prenom}, petit rappel : si vous avez une minute, votre avis Google nous aiderait vraiment : {lien_avis} Merci ! {entreprise}",
 
+    visite_sms: "Bonjour {prenom}, c'est noté : {entreprise} passera chez vous {visite} ({travaux}). Un empêchement ? Appelez le {tel}.",
+    visite_email_subject: "Votre visite est confirmée : {visite}",
+    visite_email: "Bonjour {prenom},\n\nMerci pour votre demande ({travaux}). Votre visite est confirmée :\n{visite}\n\nNous verrons ensemble votre installation pour vous remettre un devis précis.\nUn empêchement ? Appelez-nous au {tel}.\n\nÀ bientôt,\n{artisan}\n{entreprise}",
+    rappel_visite_sms: "Bonjour {prenom}, petit rappel : {entreprise} passe chez vous demain, {visite}. Un empêchement ? Appelez le {tel}.",
+
+    entretien_sms: "Bonjour {prenom}, c'est {artisan} de {entreprise}. C'est le moment de prévoir l'entretien de votre installation ({travaux}). Choisissez un créneau ici : {lien_rdv} ou appelez le {tel}.",
+    entretien_email_subject: "C'est le moment de l'entretien de votre installation",
+    entretien_email: "Bonjour {prenom},\n\nVotre installation ({travaux}) arrive à la date de son entretien.\nUn entretien régulier garde votre installation sûre et économe, et il est souvent exigé par la garantie et par la réglementation.\n\nChoisissez simplement un jour et un créneau avec le bouton ci-dessous, nous vous confirmons le passage.\n\nÀ bientôt,\n{artisan}\n{entreprise} · {tel}",
+
     appel_sms: "Bonjour, c'est {entreprise}. Désolé, je suis en intervention et n'ai pas pu décrocher. Indiquez votre besoin et vos disponibilités ici, je vous rappelle vite : {lien_rdv}",
     appel_vocal: "Bonjour, vous êtes bien chez {entreprise}. Nous sommes en intervention. Vous allez recevoir un SMS pour prendre rendez-vous. Merci et à très vite.",
   },
+};
+
+// Messages aux clients néerlandophones (mêmes variables). Modifiables dans Réglages.
+DEFAULT_SETTINGS.templates_nl = {
+  confirmation_sms: 'Beste {prenom}, {entreprise} heeft uw aanvraag goed ontvangen ({travaux}). We nemen snel contact met u op. Tel: {tel}',
+  confirmation_email_subject: 'We hebben uw aanvraag goed ontvangen',
+  confirmation_email: 'Beste {prenom},\n\nBedankt voor uw aanvraag over: {travaux}.\nWe bekijken ze en nemen snel contact met u op om een bezoek af te spreken of u een offerte te bezorgen.\n\nTot binnenkort,\n{artisan}\n{entreprise} · {tel}',
+  relance_1_sms: 'Beste {prenom}, {artisan} van {entreprise} hier. Heeft u onze offerte ({travaux}) al kunnen bekijken? U kunt met 1 klik antwoorden: {lien}',
+  relance_1_email_subject: 'Uw offerte van {entreprise}: al kunnen bekijken?',
+  relance_1_email: 'Beste {prenom},\n\nIk kom even terug op offerte {ref} ({travaux}{montant_txt}) die we u bezorgd hebben.\n\nHeeft u ze al kunnen bekijken? Heeft u nog vragen, dan help ik u graag verder.\n\nMet vriendelijke groeten,\n{artisan}\n{entreprise} · {tel}',
+  relance_2_sms: 'Beste {prenom}, ik kom even terug op de offerte voor {travaux}. Een vraag of iets aan te passen? Antwoord hier: {lien} of bel {tel}. {entreprise}',
+  relance_2_email_subject: 'Een vraag over uw offerte?',
+  relance_2_email: 'Beste {prenom},\n\nIk kom even terug op uw project ({travaux}). Is iets in de offerte niet duidelijk of wilt u ze aanpassen (materiaal, opties, termijnen), dan bel ik u graag.\n\nLaat het ons gewoon weten met de knoppen hieronder.\n\nMet vriendelijke groeten,\n{artisan}\n{entreprise} · {tel}',
+  relance_3_sms: 'Beste {prenom}, nog een laatste berichtje over onze offerte voor {travaux}. Is het project nog actueel? Dan plannen we een datum: {lien}. Zo niet, geen probleem! {entreprise}',
+  relance_3_email_subject: 'Is uw project nog actueel?',
+  relance_3_email: 'Beste {prenom},\n\nDit is mijn laatste bericht over offerte {ref} ({travaux}).\nIs uw project nog actueel, dan kunnen we een datum voor de werken vastleggen. Werd het uitgesteld of aan iemand anders toevertrouwd, laat het me dan gewoon weten met één klik: ik stuur u dan geen herinneringen meer.\n\nBedankt en nog een fijne dag,\n{artisan}\n{entreprise} · {tel}',
+  avis_sms: 'Beste {prenom}, bedankt voor uw vertrouwen! Bent u tevreden over de werken? Een Google-review helpt ons enorm (1 minuut): {lien_avis} {artisan}, {entreprise}',
+  avis_email_subject: 'Bedankt! Uw mening telt voor ons',
+  avis_email: 'Beste {prenom},\n\nBedankt dat u {entreprise} gekozen heeft voor {travaux}.\nBent u tevreden over ons werk, zou u dan even de tijd willen nemen voor een Google-review? Dat helpt een lokaal bedrijf als het onze enorm.\n\nHartelijk dank,\n{artisan}',
+  avis_relance_sms: 'Beste {prenom}, een kleine herinnering: als u even tijd heeft, zou uw Google-review ons echt helpen: {lien_avis} Bedankt! {entreprise}',
+  visite_sms: 'Beste {prenom}, genoteerd: {entreprise} komt langs op {visite} ({travaux}). Verhinderd? Bel {tel}.',
+  visite_email_subject: 'Uw bezoek is bevestigd: {visite}',
+  visite_email: 'Beste {prenom},\n\nBedankt voor uw aanvraag ({travaux}). Uw bezoek is bevestigd:\n{visite}\n\nWe bekijken samen uw installatie om u een nauwkeurige offerte te bezorgen.\nVerhinderd? Bel ons op {tel}.\n\nTot binnenkort,\n{artisan}\n{entreprise}',
+  rappel_visite_sms: 'Beste {prenom}, een kleine herinnering: {entreprise} komt morgen bij u langs, {visite}. Verhinderd? Bel {tel}.',
+  entretien_sms: 'Beste {prenom}, {artisan} van {entreprise} hier. Het is tijd voor het onderhoud van uw installatie ({travaux}). Kies hier een tijdslot: {lien_rdv} of bel {tel}.',
+  entretien_email_subject: 'Tijd voor het onderhoud van uw installatie',
+  entretien_email: 'Beste {prenom},\n\nUw installatie ({travaux}) is aan haar onderhoud toe.\nEen regelmatig onderhoud houdt uw installatie veilig en zuinig, en is vaak verplicht voor de garantie en door de regelgeving.\n\nKies gewoon een dag en een tijdslot met de knop hieronder, wij bevestigen het bezoek.\n\nTot binnenkort,\n{artisan}\n{entreprise} · {tel}',
 };
 
 const STATUSES = {
@@ -49,7 +88,7 @@ const SOURCES = { formulaire: 'Formulaire de devis', site: 'Site web', appel: 'A
 
 const KINDS = {
   confirmation: 'Accusé de réception', relance_1: 'Relance 1', relance_2: 'Relance 2', relance_3: 'Relance 3',
-  avis: "Demande d'avis", avis_relance: "Rappel d'avis", appel: 'SMS appel manqué', notif: 'Alerte artisan', rapport: 'Bilan mensuel',
+  avis: "Demande d'avis", avis_relance: "Rappel d'avis", entretien: "Rappel d'entretien", appel: 'SMS appel manqué', visite: 'Confirmation de visite', rappel_visite: 'Rappel de visite (veille)', notif: 'Alerte artisan', rapport: 'Bilan mensuel',
 };
 
 function mergeSettings(raw) {

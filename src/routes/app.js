@@ -5,6 +5,7 @@ const E = require('../engine');
 const { appLayout, badge, fullName } = require('../views');
 const { STATUSES, SOURCES, KINDS, DEFAULT_SETTINGS } = require('../defaults');
 const { WORK_TYPES } = require('./public');
+const V = require('../visits');
 
 const MSG_STATUS = { en_attente: ['Programmé', '#1c7ed6'], envoye: ['Envoyé', '#2f9e44'], simule: ['Simulé', '#7048e8'], echec: ['Échec', '#e03131'], annule: ['Annulé', '#adb5bd'] };
 const mbadge = (s) => { const [l, c] = MSG_STATUS[s] || [s, '#868e96']; return `<span class="badge" style="background:${c}">${l}</span>`; };
@@ -24,8 +25,10 @@ module.exports = (db) => {
     const pipeline = db.prepare(`SELECT status, COUNT(*) n, COALESCE(SUM(quote_amount),0) s FROM leads WHERE account_id=? GROUP BY status`).all(a.id);
     const pipe = Object.fromEntries(pipeline.map((p) => [p.status, p]));
     const next = db.prepare(`SELECT m.*, l.first_name, l.last_name, l.phone, l.email FROM messages m LEFT JOIN leads l ON l.id=m.lead_id WHERE m.account_id=? AND m.status='en_attente' AND m.kind<>'notif' ORDER BY m.scheduled_at LIMIT 8`).all(a.id);
+    const visits = db.prepare(`SELECT * FROM leads WHERE account_id=? AND visit_at>=? AND status NOT IN ('refuse','perdu') ORDER BY visit_at LIMIT 6`).all(a.id, U.iso(U.addHours(new Date(), -2)));
     const kpi = (v, l) => `<div class="card kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`;
     const setup = [];
+    if (!require('../push').count(db, a.id)) setup.push('📲 <a href="/app/appli">Installez l\'appli sur votre téléphone</a> pour être prévenu à chaque nouvelle demande.');
     if (!a.google_review_url) setup.push('<a href="/app/reglages">Ajoutez votre lien d\'avis Google</a> pour activer les demandes d\'avis.');
     if (!a.phone) setup.push('<a href="/app/reglages">Ajoutez votre numéro</a> pour qu\'il apparaisse dans les messages.');
     res.send(appLayout(req, 'Tableau de bord', `<h1>Bonjour ${U.esc((a.owner_name || '').split(' ')[0])} 👋</h1>
@@ -33,7 +36,8 @@ ${setup.length ? `<div class="banner">${setup.join('<br>')}</div>` : ''}
 <div class="grid g4">${kpi(st.demandes, 'demandes ce mois-ci')}${kpi(st.devis, 'devis envoyés')}${kpi(st.relances, 'relances envoyées')}${kpi(`${st.signes} <small style="font-size:15px">(${U.euros(st.ca)})</small>`, 'devis signés')}
 ${kpi(st.signesApresRelance, 'signés après relance')}${kpi(st.appels, 'appels manqués traités')}${kpi(st.avisDemandes, 'avis demandés')}${kpi(st.avisClics, 'clics vers Google')}</div>
 <div class="grid g2" style="margin-top:14px">
-<div><h2>À traiter</h2>${todo.length ? `<table>${todo.map((l) => `<tr class="click" onclick="location='/app/demandes/${l.id}'"><td><b>${fullName(l)}</b><div class="small muted">${U.esc(l.work_type || SOURCES[l.source] || '')}</div></td><td>${l.client_response === 'rappel' ? '<span class="badge" style="background:#e8590c">À rappeler</span>' : badge(l.status)}<div class="small muted">${U.frDate(l.created_at)}</div></td></tr>`).join('')}</table>` : '<div class="card muted">Rien à traiter pour l\'instant.</div>'}</div>
+<div><h2>À traiter</h2>${todo.length ? `<table>${todo.map((l) => `<tr class="click" onclick="location='/app/demandes/${l.id}'"><td><b>${fullName(l)}</b><div class="small muted">${U.esc(l.work_type || SOURCES[l.source] || '')}</div></td><td>${l.client_response === 'rappel' ? '<span class="badge" style="background:#e8590c">À rappeler</span>' : badge(l.status)}<div class="small muted">${U.frDate(l.created_at)}</div></td></tr>`).join('')}</table>` : '<div class="card muted">Rien à traiter pour l\'instant.</div>'}
+${visits.length ? `<h2>Prochaines visites</h2><table>${visits.map((l) => `<tr class="click" onclick="location='/app/demandes/${l.id}'"><td><b>${U.esc(V.label(l.visit_at, a))}</b><div class="small muted">${fullName(l)} · ${U.esc([l.address, l.postal_code, l.city].filter(Boolean).join(' '))}</div></td></tr>`).join('')}</table>` : ''}</div>
 <div><h2>Devis en cours</h2><div class="card">${['devis_envoye', 'accepte', 'termine'].map((s) => `<div class="row" style="padding:6px 0"><div>${badge(s)}</div><div class="right"><b>${pipe[s]?.n || 0}</b> · ${U.euros(pipe[s]?.s || 0)}</div></div>`).join('')}</div>
 <h2>Prochains envois automatiques</h2>${next.length ? `<table>${next.map((m) => `<tr><td>${U.esc(KINDS[m.kind] || m.kind)} <span class="pill">${m.channel === 'sms' ? 'SMS' : 'e-mail'}</span><div class="small muted">${U.esc([m.first_name, m.last_name].filter(Boolean).join(' ') || m.to_addr)}</div></td><td class="small">${U.frDate(m.scheduled_at)}</td></tr>`).join('')}</table>` : '<div class="card muted">Aucun envoi programmé.</div>'}</div></div>
 <p style="margin-top:18px"><a class="btn" href="/app/demandes/nouvelle">+ Ajouter un devis / une demande</a></p>`, 'home'));
@@ -61,12 +65,14 @@ ${rows.length ? `<table><tr><th>Client</th><th>Projet</th><th>Statut</th><th>Mon
   r.get('/demandes/nouvelle', (req, res) => {
     res.send(appLayout(req, 'Nouvelle demande', `<h1>Ajouter un client / un devis</h1><div class="card" style="max-width:720px"><form method="post" action="/app/demandes">
 <div class="row"><div><label>Prénom</label><input name="first_name"></div><div><label>Nom</label><input name="last_name"></div></div>
-<div class="row"><div><label>Mobile</label><input name="phone" placeholder="06…"></div><div><label>E-mail</label><input name="email" type="email"></div></div>
+<div class="row"><div><label>Mobile</label><input name="phone" placeholder="${U.C(req.account).mobileExample}"></div><div><label>E-mail</label><input name="email" type="email"></div></div>
 <div class="row"><div><label>Adresse</label><input name="address"></div><div><label>Code postal</label><input name="postal_code"></div><div><label>Ville</label><input name="city"></div></div>
 <label>Projet</label><select name="work_type">${WORK_TYPES.map((w) => `<option>${w}</option>`).join('')}</select>
 <label>Notes</label><textarea name="message"></textarea>
 <h2>Le devis est déjà envoyé ?</h2><p class="small muted">Si vous remplissez le montant, la demande passe en « Devis envoyé » et les relances automatiques démarrent.</p>
-<div class="row"><div><label>Montant TTC (€)</label><input name="quote_amount" inputmode="decimal"></div><div><label>N° de devis</label><input name="quote_ref"></div></div>
+<div class="row"><div><label>Montant ${U.C(req.account).tax} (€)</label><input name="quote_amount" inputmode="decimal"></div><div><label>N° de devis</label><input name="quote_ref"></div></div>
+<h2>Ancien client à recontacter pour l'entretien ?</h2><p class="small muted">Indiquez la date de votre dernier passage : la fiche est classée « Chantier terminé » (sans demande d'avis) et le rappel d'entretien part ${E.settingsOf(req.account).entretien.months} mois après cette date.</p>
+<div class="row"><div><label>Dernier passage le</label><input name="last_service" type="date" max="${new Date().toISOString().slice(0, 10)}"></div><div></div></div>
 <label class="chk"><input type="checkbox" name="consent" value="1" checked> Le client a accepté d'être recontacté (SMS / e-mail) au sujet de ce devis.</label>
 <p><button class="btn">Enregistrer</button></p></form></div>`, 'demandes'));
   });
@@ -75,6 +81,13 @@ ${rows.length ? `<table><tr><th>Client</th><th>Projet</th><th>Statut</th><th>Mon
     if (!b.phone && !b.email && !b.last_name && !b.first_name) return res.redirect('/app/demandes/nouvelle?err=' + encodeURIComponent('Indiquez au moins un nom, un téléphone ou un e-mail.'));
     const l = E.createLead(db, a, { ...b, consent: b.consent ? 1 : 0 }, { source: 'manuel', notify: false, confirm: false });
     const amount = parseFloat(String(b.quote_amount || '').replace(/\s/g, '').replace(',', '.'));
+    const last = /^\d{4}-\d{2}-\d{2}$/.test(b.last_service || '') ? new Date(`${b.last_service}T10:00:00Z`) : null;
+    if (last && !(amount > 0)) {
+      E.updateLead(db, l.id, { status: 'termine', completed_at: U.iso(last), decided_at: U.iso(last) });
+      const n = E.scheduleMaintenance(db, a, E.getLead(db, l.id), last);
+      E.logEvent(db, a.id, l.id, 'statut', `Ancien client ajouté (dernier passage le ${U.frDate(U.iso(last), false)})${n ? ' · rappel d\'entretien programmé' : ''}`);
+      return back(res, `/app/demandes/${l.id}`, n ? "Client enregistré, le rappel d'entretien est programmé." : "Client enregistré (rappel d'entretien désactivé ou pas de coordonnées).");
+    }
     if (amount > 0) E.setStatus(db, a, l.id, 'devis_envoye', { quote_amount: amount, quote_ref: b.quote_ref || null });
     back(res, `/app/demandes/${l.id}`, amount > 0 ? 'Devis enregistré, les relances automatiques sont programmées.' : 'Demande enregistrée.');
   });
@@ -87,16 +100,18 @@ ${rows.length ? `<table><tr><th>Client</th><th>Projet</th><th>Statut</th><th>Mon
     const act = (status, label, cls = 'sec') => `<form method="post" action="/app/demandes/${l.id}/statut"><input type="hidden" name="status" value="${status}"><button class="btn sm ${cls}">${label}</button></form>`;
     const f = (k, label, type = 'text') => `<div><label>${label}</label><input name="${k}" type="${type}" value="${U.esc(k === 'phone' ? U.displayPhone(l[k]) : l[k] ?? '')}"></div>`;
     res.send(appLayout(req, fullName(l), `<p class="small"><a href="/app/demandes">← Toutes les demandes</a></p>
-<div class="row"><h1 style="flex:3">${fullName(l)} ${badge(l.status)}</h1></div>
+<div class="row"><h1 style="flex:3">${fullName(l)} ${badge(l.status)}${l.lang === 'nl' ? ' <span class="badge" style="background:#495057" title="Ce client a écrit en néerlandais : ses messages automatiques partent en néerlandais">NL</span>' : ''}</h1></div>
 ${l.client_response === 'rappel' && l.status === 'devis_envoye' ? '<div class="banner">📞 Ce client a demandé à être rappelé. Les relances sont en pause.</div>' : ''}
 ${l.opt_out_sms || l.opt_out_email ? `<div class="banner">Ce client s'est désinscrit (${[l.opt_out_sms && 'SMS', l.opt_out_email && 'e-mail'].filter(Boolean).join(', ')}). Aucun message automatique ne lui sera envoyé sur ce canal.</div>` : ''}
 <div class="grid g2"><div>
 <div class="card"><h3>Que s'est-il passé ?</h3>
 <form method="post" action="/app/demandes/${l.id}/statut" class="row" style="align-items:flex-end"><input type="hidden" name="status" value="devis_envoye">
-<div><label>Montant du devis TTC (€)</label><input name="quote_amount" inputmode="decimal" value="${l.quote_amount ?? ''}"></div><div><label>N° de devis</label><input name="quote_ref" value="${U.esc(l.quote_ref || '')}"></div>
+<div><label>Montant du devis ${U.C(req.account).tax} (€)</label><input name="quote_amount" inputmode="decimal" value="${l.quote_amount ?? ''}"></div><div><label>N° de devis</label><input name="quote_ref" value="${U.esc(l.quote_ref || '')}"></div>
 <div style="flex:0 0 auto"><button class="btn">${l.status === 'devis_envoye' ? 'Relancer à nouveau' : "J'ai envoyé le devis"}</button></div></form>
 <p class="small muted">Relances automatiques à J+${E.settingsOf(req.account).relances.days.join(', J+')} tant que le client n'a pas répondu.</p>
 <div class="actions">${act('rdv', '📅 Visite prévue')}${act('accepte', '✔ Devis signé', 'ok')}${act('termine', '🏁 Chantier terminé → demander un avis')}${act('refuse', 'Refusé')}${act('perdu', 'Sans suite')}${l.status !== 'nouveau' ? act('nouveau', 'Remettre en « nouvelle »') : ''}</div></div>
+${aiCard(req, l)}
+${visitCard(req.account, l)}
 <div class="card" style="margin-top:14px"><h3>Coordonnées</h3><form method="post" action="/app/demandes/${l.id}/modifier">
 <div class="row">${f('first_name', 'Prénom')}${f('last_name', 'Nom')}</div><div class="row">${f('phone', 'Mobile')}${f('email', 'E-mail', 'email')}</div>
 <div class="row">${f('address', 'Adresse')}${f('postal_code', 'CP')}${f('city', 'Ville')}</div>
@@ -128,11 +143,81 @@ ${l.opt_out_sms || l.opt_out_email ? `<div class="banner">Ce client s'est désin
     const msg = { devis_envoye: 'Relances programmées. Elles s\'arrêtent dès que le client répond ou que vous changez le statut.', termine: "Chantier terminé : la demande d'avis Google est programmée.", accepte: 'Bravo ! Les relances sont arrêtées.' }[status] || 'Statut mis à jour.';
     back(res, `/app/demandes/${l.id}`, msg);
   });
+  const gcal = (a, l) => {
+    const c = V.config(a), start = new Date(l.visit_at), p = U.parisParts(start);
+    const slot = c.slotList.find(([x]) => Math.abs(x - (p.h + p.min / 60)) < 0.01);
+    const end = new Date(start.getTime() + (slot ? (slot[1] - slot[0]) : 2) * 3600000);
+    const f = (d) => d.toISOString().replace(/[-:]|\.\d{3}/g, '');
+    const q = new URLSearchParams({ action: 'TEMPLATE', text: `Visite ${[l.first_name, l.last_name].filter(Boolean).join(' ')} (${l.work_type || 'devis'})`, dates: `${f(start)}/${f(end)}`,
+      location: [l.address, l.postal_code, l.city].filter(Boolean).join(' '), details: `Tél : ${U.displayPhone(l.phone)}\n${E.BASE()}/app/demandes/${l.id}` });
+    return `https://calendar.google.com/calendar/render?${q}`;
+  };
+  function visitCard(a, l) {
+    const opts = V.available(db, a, { keep: l.visit_at });
+    const sel = `<select name="visit"><option value="">Choisir un créneau…</option>${opts.map((d) => `<optgroup label="${U.esc(d.label)}">${d.slots.map((s) => `<option value="${s.iso}" ${s.iso === l.visit_at ? 'selected' : ''}>${U.esc(d.label)}, ${s.text}</option>`).join('')}</optgroup>`).join('')}</select>`;
+    const past = l.visit_at && new Date(l.visit_at) < new Date();
+    return `<div class="card" style="margin-top:14px"><h3>📅 Visite</h3>${l.visit_at ? `<p><b>${U.esc(V.label(l.visit_at, a))}</b>${past ? ' <span class="small muted">(passée)</span>' : ''}</p><p class="small"><a href="${U.esc(gcal(a, l))}" target="_blank" rel="noopener">Ajouter à mon agenda Google</a></p>` : '<p class="muted small">Aucune visite prévue.</p>'}
+${opts.length ? `<form method="post" action="/app/demandes/${l.id}/visite" class="row" style="align-items:flex-end"><div>${sel}</div><div style="flex:0 0 auto"><button class="btn sm">${l.visit_at ? 'Déplacer' : 'Fixer la visite'}</button></div></form>
+<p class="small muted">Le client reçoit une confirmation avec la date, puis un rappel par SMS la veille.</p>` : '<p class="small muted">Aucun créneau libre : vérifiez vos créneaux de visite dans Réglages.</p>'}
+${l.visit_at && !past ? `<form method="post" action="/app/demandes/${l.id}/visite"><input type="hidden" name="visit" value=""><button class="btn sm sec">Annuler la visite</button></form>` : ''}</div>`;
+  }
+  // ---------- Assistant IA (facultatif) ----------
+  const AI = require('../ai');
+  function aiCard(req, l) {
+    if (!AI.enabled()) return '';
+    const sms = l.phone ? `sms:${l.phone}?&body=` : '';
+    return `<div class="card ai" style="margin-top:14px"><h3>✨ Assistant IA</h3>
+${l.ai_summary ? `<div class="ai-out">${U.esc(l.ai_summary)}</div>` : ''}<form method="post" action="/app/demandes/${l.id}/ia/resume" style="margin-top:6px"><button class="btn sm sec">${l.ai_summary ? '↻ Refaire le résumé' : 'Résumer cette demande'}</button></form>
+<form method="post" action="/app/demandes/${l.id}/ia/reponse" style="margin-top:10px"><label>Rédiger un message au client</label>
+<input name="instruction" placeholder="Facultatif : ce que vous voulez dire (ex. proposer jeudi matin, le devis est prêt…)">
+<div class="row" style="margin-top:6px">${l.phone ? '<button class="btn sm" name="channel" value="sms" style="flex:0 0 auto">Brouillon de SMS</button>' : ''}${l.email ? '<button class="btn sm sec" name="channel" value="email" style="flex:0 0 auto">Brouillon d\'e-mail</button>' : ''}</div></form>
+${l.ai_draft ? `<label>Brouillon (modifiable)</label><textarea id="draft" rows="6">${U.esc(l.ai_draft)}</textarea>
+<div class="row">${sms ? `<a class="btn sm" style="flex:0 0 auto" href="#" onclick="location.href='${sms}'+encodeURIComponent(document.getElementById('draft').value);return false">Envoyer par SMS</a>` : ''}${l.email ? `<a class="btn sm sec" style="flex:0 0 auto" href="#" onclick="location.href='mailto:${U.esc(l.email)}?subject='+encodeURIComponent(${U.esc(JSON.stringify(req.account.company_name))})+'&body='+encodeURIComponent(document.getElementById('draft').value);return false">Envoyer par e-mail</a>` : ''}<button type="button" class="btn sm grey" style="flex:0 0 auto" onclick="navigator.clipboard.writeText(document.getElementById('draft').value);this.textContent='Copié ✓'">Copier</button></div>` : ''}
+<p class="small muted">L'IA propose, vous relisez : rien n'est envoyé sans vous.</p></div>`;
+  }
+  const aiRun = (fn) => async (req, res, next) => {
+    const l = lead(req); if (!l) return res.redirect('/app/demandes');
+    try { await fn(req, l); back(res, `/app/demandes/${l.id}`, 'Voici la proposition de l\'assistant.'); } catch (e) {
+      if (!(e instanceof AI.AiError)) return next(e);
+      res.redirect(`/app/demandes/${l.id}?err=${encodeURIComponent(e.message)}`);
+    }
+  };
+  r.post('/demandes/:id/ia/resume', aiRun(async (req, l) => E.updateLead(db, l.id, { ai_summary: await AI.summarize(db, req.account, l) })));
+  r.post('/demandes/:id/ia/reponse', aiRun(async (req, l) => E.updateLead(db, l.id, { ai_draft: await AI.draftReply(db, req.account, l, { channel: req.body.channel === 'email' ? 'email' : 'sms', instruction: req.body.instruction || '' }) })));
+
+  const avisPage = (req, { values = {}, reply = '', error = '' } = {}) => appLayout(req, 'Répondre aux avis', `<h1>✨ Répondre à un avis Google</h1>
+<p class="muted">Répondre à chaque avis, même court, améliore votre place sur Google Maps. Collez l'avis, l'assistant vous propose une réponse.</p>
+${error ? `<div class="flash err">${U.esc(error)}</div>` : ''}
+<div class="grid g2"><div class="card"><form method="post" action="/app/avis-google">
+<div class="row"><div><label>Note</label><select name="stars">${[5, 4, 3, 2, 1].map((n) => `<option value="${n}" ${String(values.stars || 5) === String(n) ? 'selected' : ''}>${'★'.repeat(n)}${'☆'.repeat(5 - n)}</option>`).join('')}</select></div><div><label>Prénom du client (facultatif)</label><input name="author" value="${U.esc(values.author || '')}"></div></div>
+<label>Texte de l'avis</label><textarea name="review" rows="6" placeholder="Collez ici le texte de l'avis…">${U.esc(values.review || '')}</textarea>
+<p><button class="btn">Proposer une réponse</button></p></form></div>
+<div class="card"><h3>Réponse proposée</h3>${reply ? `<textarea id="draft" rows="8">${U.esc(reply)}</textarea><p class="row"><button type="button" class="btn sm" style="flex:0 0 auto" onclick="navigator.clipboard.writeText(document.getElementById('draft').value);this.textContent='Copié ✓'">Copier</button></p><p class="small muted">Collez-la ensuite dans Google Business Profile › Avis › Répondre.</p>` : '<p class="muted small">La réponse apparaîtra ici.</p>'}</div></div>`, 'avis');
+  r.get('/avis-google', (req, res) => {
+    if (!AI.enabled()) return res.redirect('/app');
+    res.send(avisPage(req));
+  });
+  r.post('/avis-google', async (req, res, next) => {
+    if (!AI.enabled()) return res.redirect('/app');
+    try { res.send(avisPage(req, { values: req.body, reply: await AI.reviewReply(db, req.account, req.body) })); } catch (e) {
+      if (!(e instanceof AI.AiError)) return next(e);
+      res.send(avisPage(req, { values: req.body, error: e.message }));
+    }
+  });
+
+  r.post('/demandes/:id/visite', (req, res) => {
+    const l = lead(req); if (!l) return res.redirect('/app/demandes');
+    const iso = String(req.body.visit || '');
+    if (iso && !V.isAvailable(db, req.account, iso, { keep: l.visit_at })) return res.redirect(`/app/demandes/${l.id}?err=` + encodeURIComponent('Ce créneau n\'est plus libre.'));
+    E.setVisit(db, req.account, l.id, iso || null);
+    E.processDue(db).catch(() => {});
+    back(res, `/app/demandes/${l.id}`, iso ? 'Visite enregistrée, le client est prévenu.' : 'Visite annulée.');
+  });
   r.post('/demandes/:id/modifier', (req, res) => {
     const l = lead(req); if (!l) return res.redirect('/app/demandes');
     const b = req.body; const fields = {};
     for (const k of ['first_name', 'last_name', 'address', 'postal_code', 'city', 'work_type', 'preferred_slot', 'message', 'notes']) if (b[k] !== undefined) fields[k] = String(b[k]).trim();
-    if (b.phone !== undefined) fields.phone = U.normalizePhone(b.phone);
+    if (b.phone !== undefined) fields.phone = U.normalizePhone(b.phone, req.account.country);
     if (b.email !== undefined) fields.email = String(b.email).trim().toLowerCase();
     E.updateLead(db, l.id, fields);
     back(res, `/app/demandes/${l.id}`, 'Fiche enregistrée.');
@@ -179,15 +264,15 @@ ${signed.length ? `<h2>Chantiers signés</h2><table><tr><th>Client</th><th>Proje
     const a = req.account, B = E.BASE();
     res.send(appLayout(req, 'Intégration', `<h1>Formulaire, site & appels manqués</h1>
 <div class="grid g2">
-<div class="card"><h3>1. Formulaire de devis</h3><p>Lien direct (à mettre sur Facebook, Google Business, cartes de visite…) :</p><pre class="code">${B}/f/${a.slug}</pre><a class="btn sm sec" target="_blank" href="/f/${a.slug}">Voir le formulaire</a>
+<div class="card"><h3>1. Formulaire de devis</h3><p>Lien direct (à mettre sur Facebook, Google Business, cartes de visite…) :</p><pre class="code">${B}/f/${a.slug}</pre><p class="small">En néerlandais : <code>${B}/f/${a.slug}?lang=nl</code>. Le formulaire s'affiche aussi tout seul en néerlandais si le téléphone du client est réglé en néerlandais.</p><a class="btn sm sec" target="_blank" href="/f/${a.slug}">Voir le formulaire</a>
 <p>Pour l'intégrer à un site existant (WordPress, Wix…), copiez ce code :</p><pre class="code">${U.esc(`<iframe src="${B}/f/${a.slug}?embed=1" style="width:100%;min-height:980px;border:0" title="Demande de devis"></iframe>`)}</pre></div>
 <div class="card"><h3>2. Mini-site vitrine</h3><p>Site prêt à l'emploi avec le formulaire intégré :</p><pre class="code">${B}/s/${a.slug}</pre><a class="btn sm sec" target="_blank" href="/s/${a.slug}">Voir le site</a>
 <p class="small muted">Textes, prestations, couleur et zone d'intervention se modifient dans Réglages. Pour un nom de domaine à lui (ex. dupont-chauffage.fr), faites une redirection vers ce lien.</p></div>
 <div class="card"><h3>3. SMS automatique après un appel manqué</h3>
 <p><b>Option A (Twilio, la plus simple côté artisan) :</b> achetez un numéro Twilio, réglez son « A call comes in » sur ce webhook (POST), puis l'artisan active le renvoi d'appel « si non-réponse » vers ce numéro (code **61*numéro# sur son mobile).</p><pre class="code">${B}/webhooks/twilio/voix/${a.webhook_token}</pre>
-<p><b>Option B (standard téléphonique, Make, Zapier, appli d'appels) :</b> appelez cette adresse avec le numéro de l'appelant :</p><pre class="code">${B}/webhooks/appel-manque/${a.webhook_token}?from=0612345678</pre>
+<p><b>Option B (standard téléphonique, Make, Zapier, appli d'appels) :</b> appelez cette adresse avec le numéro de l'appelant :</p><pre class="code">${B}/webhooks/appel-manque/${a.webhook_token}?from=${U.C(a).mobileExample.replace(/ /g, '')}</pre>
 <p>Page de prise de RDV envoyée par SMS : <a href="/rdv/${a.slug}" target="_blank">${B}/rdv/${a.slug}</a>${a.booking_url ? ' (redirige vers votre agenda en ligne)' : ''}</p>
-<form method="post" action="/app/integration/test-appel" class="row"><input name="from" placeholder="Numéro mobile de test, ex. 06…"><div style="flex:0 0 auto"><button class="btn sm">Simuler un appel manqué</button></div></form></div>
+<form method="post" action="/app/integration/test-appel" class="row"><input name="from" placeholder="Numéro mobile de test, ex. ${U.C(a).mobileExample}"><div style="flex:0 0 auto"><button class="btn sm">Simuler un appel manqué</button></div></form></div>
 <div class="card"><h3>4. Réponse STOP aux SMS</h3><p>Dans Brevo (ou Twilio), configurez l'URL des SMS entrants sur :</p><pre class="code">${B}/webhooks/sms-entrant${process.env.INBOUND_KEY ? '?key=' + U.esc(process.env.INBOUND_KEY) : ''}</pre><p class="small muted">Un client qui répond STOP ne reçoit plus aucun SMS, chez aucun de vos artisans.</p></div>
 </div>`, 'integration'));
   });
@@ -196,6 +281,43 @@ ${signed.length ? `<h2>Chantiers signés</h2><table><tr><th>Client</th><th>Proje
     await E.processDue(db).catch(() => {});
     if (!out.ok) return res.redirect('/app/integration?err=' + encodeURIComponent(`Test impossible : ${out.reason}`));
     back(res, out.leadId ? `/app/demandes/${out.leadId}` : '/app/integration', out.skipped ? `SMS non renvoyé : ${out.skipped}.` : 'Appel manqué simulé : voici la fiche créée et le SMS envoyé.');
+  });
+
+  // ---------- Appli installable & notifications ----------
+  const push = require('../push');
+  r.get('/appli', (req, res) => {
+    const n = push.count(db, req.account.id);
+    res.send(appLayout(req, 'Appli & notifications', `<h1>Appli & notifications</h1>
+<div class="grid g2"><div class="card" id="pwa"><h3>🔔 Être prévenu tout de suite</h3>
+<p>Recevez une notification sur ce téléphone à chaque nouvelle demande, appel manqué, devis accepté ou client à rappeler.</p>
+<p id="pwa-status" class="small muted">Vérification…</p>
+<p class="row"><button class="btn" id="pwa-on" style="flex:0 0 auto">Activer les notifications</button><button class="btn sec" id="pwa-test" style="display:none;flex:0 0 auto">Envoyer un test</button><button class="btn sm grey" id="pwa-off" style="display:none;flex:0 0 auto">Désactiver sur cet appareil</button></p>
+<p class="small muted">${n ? `${n} appareil(s) reçoivent déjà vos notifications.` : 'Aucun appareil ne reçoit encore vos notifications.'} À faire sur chaque téléphone ou ordinateur où vous voulez être prévenu.</p></div>
+<div class="card"><h3>📲 Installer ChauffPro sur l'écran d'accueil</h3>
+<p><button class="btn" id="pwa-install" style="display:none">Installer l'appli</button></p>
+<p><b>Android (Chrome) :</b> menu ⋮ en haut à droite, puis « Installer l'application » (ou « Ajouter à l'écran d'accueil »).</p>
+<p><b>iPhone (Safari) :</b> bouton Partager <span aria-hidden="true">⬆️</span> en bas, puis « Sur l'écran d'accueil ». Ouvrez ensuite ChauffPro depuis l'icône et activez les notifications ici.</p>
+<p id="pwa-ios" class="banner" style="display:none">Sur iPhone, les notifications ne marchent qu'une fois l'appli installée sur l'écran d'accueil (iOS 16.4 ou plus récent).</p>
+<p class="small muted">L'appli s'ouvre directement sur votre tableau de bord, en plein écran, comme une vraie application.</p></div></div>`, 'appli'));
+  });
+  r.get('/push/cle', (req, res) => res.type('text/plain').send(push.publicKey(db)));
+  r.post('/push/abonner', (req, res) => res.json({ ok: push.subscribe(db, req.account.id, req.body) }));
+  r.post('/push/desabonner', (req, res) => { push.unsubscribe(db, req.account.id, req.body && req.body.endpoint); res.json({ ok: true }); });
+  r.post('/push/test', async (req, res) => res.json({ ok: true, sent: await push.notify(db, req.account, { title: '🔔 ChauffPro', body: 'Les notifications fonctionnent ! Vous serez prévenu à chaque nouvelle demande.', url: '/app' }) }));
+
+  // ---------- Abonnement (Stripe) ----------
+  r.get('/abonnement', (req, res) => {
+    const a = req.account, B = require('../billing'), p = B.PLANS[a.plan] || B.PLANS.complet;
+    const st = { actif: '✅ Actif', impaye: '⚠ Dernier paiement refusé : mettez à jour votre carte', resilie: 'Résilié' }[a.billing_status] || a.billing_status;
+    res.send(appLayout(req, 'Abonnement', `<h1>Abonnement</h1><div class="card" style="max-width:560px"><p>Formule <b>${p.name}</b> · ${a.monthly_price} €/mois HTVA</p><p>${U.esc(st)}</p>
+${a.stripe_customer_id && B.enabled() ? '<form method="post" action="/app/abonnement/portail"><button class="btn">Gérer ma carte, mes factures ou résilier</button></form>' : '<p class="muted small">Contactez-nous pour toute question sur votre abonnement.</p>'}</div>`, 'abonnement'));
+  });
+  r.post('/abonnement/portail', async (req, res, next) => {
+    try {
+      const B = require('../billing');
+      if (!req.account.stripe_customer_id || !B.enabled()) return res.redirect('/app/abonnement');
+      res.redirect(303, await B.portalUrl(req.account));
+    } catch (e) { next(e); }
   });
 
   // ---------- Réglages ----------
@@ -214,8 +336,9 @@ ${signed.length ? `<h2>Chantiers signés</h2><table><tr><th>Client</th><th>Proje
 <p class="small muted">Dans Google Business Profile : « Demander des avis » → copiez le lien.</p>
 <label>Agenda en ligne (facultatif : Calendly, Google Agenda…)</label><input name="booking_url" value="${v('booking_url')}" placeholder="Laisser vide pour utiliser la page de RDV intégrée">
 </div><div class="card"><h3>Mini-site</h3>
-<div class="row"><div><label>Ville principale</label><input name="city" value="${v('city')}"></div><div><label>SIRET</label><input name="siret" value="${v('siret')}"></div></div>
-<label>Adresse</label><input name="address" value="${v('address')}"><label>Zone d'intervention</label><input name="zone" value="${v('zone')}" placeholder="Lyon et 30 km autour">
+<div class="row"><div><label>Ville principale</label><input name="city" value="${v('city')}"></div><div><label>${U.C(a).bizLabel}</label><input name="siret" value="${v('siret')}"></div></div>
+<label>Pays</label><select name="country">${Object.entries(U.COUNTRIES).map(([k, c]) => `<option value="${k}" ${U.countryOf(a) === k ? 'selected' : ''}>${c.name}</option>`).join('')}</select>
+<label>Adresse</label><input name="address" value="${v('address')}"><label>Zone d'intervention</label><input name="zone" value="${v('zone')}" placeholder="Bruxelles et les 19 communes">
 <label>Présentation</label><textarea name="about">${v('about')}</textarea><label>Prestations (une par ligne)</label><textarea name="services">${v('services')}</textarea></div></div>
 <div class="grid g2" style="margin-top:14px"><div class="card"><h3>Automatisations</h3>
 ${chk('rel_enabled', s.relances.enabled, '<b>Relances de devis</b>')}
@@ -224,13 +347,23 @@ ${chk('rel_enabled', s.relances.enabled, '<b>Relances de devis</b>')}
 ${chk('avis_enabled', s.avis.enabled, "<b>Demandes d'avis Google</b> après « Chantier terminé »")}
 <div class="row"><div><label>Envoyer après (heures)</label><input name="avis_delay" type="number" min="0" value="${s.avis.delay_hours}"></div><div><label>Rappel après (jours, 0 = aucun)</label><input name="avis_rem" type="number" min="0" value="${s.avis.reminder_days}"></div></div>
 <div class="row">${chk('avis_sms', s.avis.sms, 'par SMS')}${chk('avis_email', s.avis.email, 'par e-mail')}</div><hr>
+${chk('ent_enabled', s.entretien.enabled, "<b>Rappel d'entretien</b> après « Chantier terminé », puis chaque année")}
+<div class="row"><div><label>Envoyer après (mois)</label><input name="ent_months" type="number" min="1" max="36" value="${s.entretien.months}"></div><div></div></div>
+<div class="row">${chk('ent_sms', s.entretien.sms, 'par SMS')}${chk('ent_email', s.entretien.email, 'par e-mail')}</div><hr>
+${chk('vis_enabled', s.visites.enabled, '<b>Réservation de visite</b> : le client choisit un créneau libre dans le formulaire')}
+<label>Jours de visite</label><div class="row">${['lun', 'mar', 'mer', 'jeu', 'ven', 'sam'].map((d) => chk(`vis_day_${d}`, s.visites.days.includes(d), V.DAY_LABELS[d])).join('')}</div>
+<div class="row"><div><label>Créneaux</label><input name="vis_slots" value="${U.esc(s.visites.slots)}" placeholder="8h-10h, 10h-12h, 13h-15h, 15h-17h"></div><div style="flex:0 0 140px"><label>Visites par créneau</label><input name="vis_per" type="number" min="1" max="5" value="${s.visites.per_slot}"></div></div>
+<div class="row"><div><label>Délai minimum (heures)</label><input name="vis_min" type="number" min="0" max="168" value="${s.visites.min_hours}"></div><div><label>Réservable sur (jours)</label><input name="vis_horizon" type="number" min="1" max="60" value="${s.visites.horizon_days}"></div></div>
+<div class="row"><div><label>Congés : fermé du</label><input name="vis_cf" type="date" value="${U.esc(s.visites.closed_from)}"></div><div><label>au</label><input name="vis_ct" type="date" value="${U.esc(s.visites.closed_to)}"></div></div><hr>
 ${chk('appel_enabled', s.appel.enabled, '<b>SMS automatique après un appel manqué</b>')}
 ${chk('conf_enabled', s.confirmation.enabled, '<b>Accusé de réception</b> au client après une demande')}<hr>
 <h3>Alertes pour vous</h3><div class="row">${chk('notif_email', s.notif.email, 'par e-mail')}${chk('notif_sms', s.notif.sms, 'par SMS')}</div>${chk('rapport', s.rapport.enabled, 'Bilan mensuel par e-mail')}
 <div class="row"><div><label>Envois clients à partir de (h)</label><input name="win_start" type="number" min="8" max="20" value="${s.window.start}"></div><div><label>jusqu'à (h)</label><input name="win_end" type="number" min="9" max="20" value="${s.window.end}"></div></div>
 <label>Mention ajoutée aux SMS de relance et d'avis (laisser vide avec Brevo, qui ajoute « STOP au 3xxxx » automatiquement)</label><input name="sms_footer" value="${U.esc(s.sms_footer)}"></div>
 <div class="card"><h3>Textes des messages</h3><p class="small muted">Variables : {prenom} {nom} {entreprise} {artisan} {tel} {travaux} {ref} {montant} {lien} (réponse au devis) {lien_avis} {lien_rdv}</p>
-${Object.keys(T).filter((k) => k !== 'appel_vocal').map((k) => tpl(k, k.replace(/_/g, ' '))).join('')}${tpl('appel_vocal', 'message vocal (Twilio)')}</div></div>
+${Object.keys(T).filter((k) => k !== 'appel_vocal').map((k) => tpl(k, k.replace(/_/g, ' '))).join('')}${tpl('appel_vocal', 'message vocal (Twilio)')}
+<details style="margin-top:12px"><summary><b>🇧🇪 Textes en néerlandais</b> (clients qui remplissent le formulaire en NL)</summary>
+${Object.keys(DEFAULT_SETTINGS.templates_nl).map((k) => `<label>${k.replace(/_/g, ' ')} (NL)</label>${k.endsWith('_subject') ? `<input name="tplnl_${k}" value="${U.esc(s.templates_nl[k])}">` : `<textarea name="tplnl_${k}" rows="${k.endsWith('_sms') ? 3 : 6}">${U.esc(s.templates_nl[k])}</textarea>`}`).join('')}</details></div></div>
 <p><button class="btn">Enregistrer les réglages</button></p></form>
 <div class="card" style="max-width:480px;margin-top:14px"><h3>Mot de passe</h3><form method="post" action="/app/mot-de-passe"><label>Nouveau mot de passe</label><input type="password" name="password" minlength="8" required><p><button class="btn sec">Changer</button></p></form></div>`, 'reglages'));
   });
@@ -240,20 +373,28 @@ ${Object.keys(T).filter((k) => k !== 'appel_vocal').map((k) => tpl(k, k.replace(
     s.relances = { enabled: !!b.rel_enabled, days: [n(b.rel_d1, 2), n(b.rel_d2, 7), n(b.rel_d3, 14)].filter((d) => d > 0), sms: !!b.rel_sms, email: !!b.rel_email };
     s.avis = { enabled: !!b.avis_enabled, delay_hours: n(b.avis_delay, 3), reminder_days: n(b.avis_rem, 4), sms: !!b.avis_sms, email: !!b.avis_email };
     s.appel = { enabled: !!b.appel_enabled };
+    const ymd = (x) => (/^\d{4}-\d{2}-\d{2}$/.test(x || '') ? x : '');
+    const slots = V.parseSlots(b.vis_slots);
+    s.visites = { enabled: !!b.vis_enabled, days: ['lun', 'mar', 'mer', 'jeu', 'ven', 'sam'].filter((d) => b[`vis_day_${d}`]), slots: slots.length ? V.slotsText(slots) : s.visites.slots,
+      per_slot: Math.min(5, Math.max(1, n(b.vis_per, 1))), min_hours: Math.min(168, Math.max(0, n(b.vis_min, 18))), horizon_days: Math.min(60, Math.max(1, n(b.vis_horizon, 14))), closed_from: ymd(b.vis_cf), closed_to: ymd(b.vis_ct) };
+    s.entretien = { enabled: !!b.ent_enabled, months: Math.min(36, Math.max(1, n(b.ent_months, 12))), sms: !!b.ent_sms, email: !!b.ent_email };
     s.confirmation = { ...s.confirmation, enabled: !!b.conf_enabled };
     s.notif = { email: !!b.notif_email, sms: !!b.notif_sms };
     s.rapport = { enabled: !!b.rapport };
     s.window = { start: Math.min(20, Math.max(8, n(b.win_start, 9))), end: Math.min(20, Math.max(9, n(b.win_end, 19))) };
     s.sms_footer = String(b.sms_footer ?? s.sms_footer);
     for (const k of Object.keys(DEFAULT_SETTINGS.templates)) if (b[`tpl_${k}`] !== undefined) s.templates[k] = String(b[`tpl_${k}`]);
+    for (const k of Object.keys(DEFAULT_SETTINGS.templates_nl)) if (b[`tplnl_${k}`] !== undefined) s.templates_nl[k] = String(b[`tplnl_${k}`]);
     const email = String(b.email || a.email).trim().toLowerCase();
+    const country = U.COUNTRIES[b.country] ? b.country : U.countryOf(a);
     if (db.prepare('SELECT 1 FROM accounts WHERE email=? AND id<>?').get(email, a.id)) return res.redirect('/app/reglages?err=' + encodeURIComponent('Cet e-mail est déjà utilisé par un autre compte.'));
-    db.prepare(`UPDATE accounts SET company_name=?, owner_name=?, phone=?, email=?, sms_sender=?, primary_color=?, google_review_url=?, booking_url=?, city=?, siret=?, address=?, zone=?, about=?, services=?, settings=? WHERE id=?`)
-      .run(b.company_name || a.company_name, b.owner_name || '', U.normalizePhone(b.phone), email, (b.sms_sender || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 11), /^#[0-9a-f]{6}$/i.test(b.primary_color) ? b.primary_color : a.primary_color,
-        (b.google_review_url || '').trim(), (b.booking_url || '').trim(), b.city || '', b.siret || '', b.address || '', b.zone || '', b.about || '', b.services || '', JSON.stringify(s), a.id);
+    db.prepare(`UPDATE accounts SET company_name=?, owner_name=?, phone=?, email=?, sms_sender=?, primary_color=?, google_review_url=?, booking_url=?, city=?, siret=?, address=?, zone=?, about=?, services=?, settings=?, country=? WHERE id=?`)
+      .run(b.company_name || a.company_name, b.owner_name || '', U.normalizePhone(b.phone, country), email, (b.sms_sender || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 11), /^#[0-9a-f]{6}$/i.test(b.primary_color) ? b.primary_color : a.primary_color,
+        (b.google_review_url || '').trim(), (b.booking_url || '').trim(), b.city || '', b.siret || '', b.address || '', b.zone || '', b.about || '', b.services || '', JSON.stringify(s), country, a.id);
     back(res, '/app/reglages', 'Réglages enregistrés.');
   });
   r.post('/mot-de-passe', (req, res) => {
+    if (req.account.is_demo) return res.redirect('/app/reglages?err=' + encodeURIComponent('Pas de mot de passe sur un compte de démonstration.'));
     if (String(req.body.password || '').length < 8) return res.redirect('/app/reglages?err=' + encodeURIComponent('8 caractères minimum.'));
     db.prepare('UPDATE accounts SET password_hash=? WHERE id=?').run(U.hashPassword(req.body.password), req.account.id);
     back(res, '/app/reglages', 'Mot de passe modifié.');

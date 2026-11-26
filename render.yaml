@@ -23,6 +23,16 @@ services:
         sync: false
       - key: EMAIL_FROM
         sync: false          # ex. notifications@votredomaine.fr (domaine validé dans Brevo)
+      - key: ANTHROPIC_API_KEY
+        sync: false          # facultatif : active l'assistant IA (laisser vide = désactivé)
+      - key: STRIPE_SECRET_KEY
+        sync: false          # facultatif : sk_test_… en mode test ; vide = inscriptions « à valider »
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false          # whsec_… (Stripe › Développeurs › Webhooks)
+      - key: CGV_URL
+        sync: false          # facultatif : lien vers vos conditions générales de vente
+      - key: CONTACT_URL
+        sync: false          # facultatif : lien « Je veux ChauffPro » affiché dans la démo (wa.me/…, mailto:…)
       - key: APP_NAME
         value: ChauffPro
       - key: INBOUND_KEY

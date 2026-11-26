@@ -90,11 +90,27 @@ function migrate(db) {
     admin_id INTEGER,
     expires_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS ai_usage (account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, task TEXT, created_at TEXT);
+  CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT);
+  CREATE TABLE IF NOT EXISTS push_subs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    endpoint TEXT UNIQUE NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
   CREATE TABLE IF NOT EXISTS opt_outs (
     phone TEXT, email TEXT, account_id INTEGER,
     created_at TEXT DEFAULT (datetime('now'))
   );
   `);
+  // Colonnes ajoutées après la première version (les bases existantes sont mises à jour automatiquement).
+  addColumns(db, 'accounts', { country: "TEXT DEFAULT 'BE'", is_demo: 'INTEGER DEFAULT 0', setup_fee: 'INTEGER DEFAULT 0', billing_status: "TEXT DEFAULT 'manuel'", stripe_customer_id: 'TEXT', stripe_subscription_id: 'TEXT' });
+  addColumns(db, 'leads', { visit_at: 'TEXT', ai_summary: 'TEXT', ai_draft: 'TEXT', lang: "TEXT DEFAULT 'fr'" }); // début du créneau de visite choisi (UTC)
+}
+
+function addColumns(db, table, cols) {
+  const have = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name));
+  for (const [name, def] of Object.entries(cols)) if (!have.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`);
 }
 
 module.exports = { openDb };
