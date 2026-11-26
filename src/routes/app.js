@@ -5,6 +5,7 @@ const E = require('../engine');
 const { appLayout, badge, fullName } = require('../views');
 const { STATUSES, SOURCES, KINDS, DEFAULT_SETTINGS } = require('../defaults');
 const { WORK_TYPES } = require('./public');
+const V = require('../visits');
 
 const MSG_STATUS = { en_attente: ['Programmé', '#1c7ed6'], envoye: ['Envoyé', '#2f9e44'], simule: ['Simulé', '#7048e8'], echec: ['Échec', '#e03131'], annule: ['Annulé', '#adb5bd'] };
 const mbadge = (s) => { const [l, c] = MSG_STATUS[s] || [s, '#868e96']; return `<span class="badge" style="background:${c}">${l}</span>`; };
@@ -24,6 +25,7 @@ module.exports = (db) => {
     const pipeline = db.prepare(`SELECT status, COUNT(*) n, COALESCE(SUM(quote_amount),0) s FROM leads WHERE account_id=? GROUP BY status`).all(a.id);
     const pipe = Object.fromEntries(pipeline.map((p) => [p.status, p]));
     const next = db.prepare(`SELECT m.*, l.first_name, l.last_name, l.phone, l.email FROM messages m LEFT JOIN leads l ON l.id=m.lead_id WHERE m.account_id=? AND m.status='en_attente' AND m.kind<>'notif' ORDER BY m.scheduled_at LIMIT 8`).all(a.id);
+    const visits = db.prepare(`SELECT * FROM leads WHERE account_id=? AND visit_at>=? AND status NOT IN ('refuse','perdu') ORDER BY visit_at LIMIT 6`).all(a.id, U.iso(U.addHours(new Date(), -2)));
     const kpi = (v, l) => `<div class="card kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`;
     const setup = [];
     if (!require('../push').count(db, a.id)) setup.push('📲 <a href="/app/appli">Installez l\'appli sur votre téléphone</a> pour être prévenu à chaque nouvelle demande.');
@@ -34,7 +36,8 @@ ${setup.length ? `<div class="banner">${setup.join('<br>')}</div>` : ''}
 <div class="grid g4">${kpi(st.demandes, 'demandes ce mois-ci')}${kpi(st.devis, 'devis envoyés')}${kpi(st.relances, 'relances envoyées')}${kpi(`${st.signes} <small style="font-size:15px">(${U.euros(st.ca)})</small>`, 'devis signés')}
 ${kpi(st.signesApresRelance, 'signés après relance')}${kpi(st.appels, 'appels manqués traités')}${kpi(st.avisDemandes, 'avis demandés')}${kpi(st.avisClics, 'clics vers Google')}</div>
 <div class="grid g2" style="margin-top:14px">
-<div><h2>À traiter</h2>${todo.length ? `<table>${todo.map((l) => `<tr class="click" onclick="location='/app/demandes/${l.id}'"><td><b>${fullName(l)}</b><div class="small muted">${U.esc(l.work_type || SOURCES[l.source] || '')}</div></td><td>${l.client_response === 'rappel' ? '<span class="badge" style="background:#e8590c">À rappeler</span>' : badge(l.status)}<div class="small muted">${U.frDate(l.created_at)}</div></td></tr>`).join('')}</table>` : '<div class="card muted">Rien à traiter pour l\'instant.</div>'}</div>
+<div><h2>À traiter</h2>${todo.length ? `<table>${todo.map((l) => `<tr class="click" onclick="location='/app/demandes/${l.id}'"><td><b>${fullName(l)}</b><div class="small muted">${U.esc(l.work_type || SOURCES[l.source] || '')}</div></td><td>${l.client_response === 'rappel' ? '<span class="badge" style="background:#e8590c">À rappeler</span>' : badge(l.status)}<div class="small muted">${U.frDate(l.created_at)}</div></td></tr>`).join('')}</table>` : '<div class="card muted">Rien à traiter pour l\'instant.</div>'}
+${visits.length ? `<h2>Prochaines visites</h2><table>${visits.map((l) => `<tr class="click" onclick="location='/app/demandes/${l.id}'"><td><b>${U.esc(V.label(l.visit_at, a))}</b><div class="small muted">${fullName(l)} · ${U.esc([l.address, l.postal_code, l.city].filter(Boolean).join(' '))}</div></td></tr>`).join('')}</table>` : ''}</div>
 <div><h2>Devis en cours</h2><div class="card">${['devis_envoye', 'accepte', 'termine'].map((s) => `<div class="row" style="padding:6px 0"><div>${badge(s)}</div><div class="right"><b>${pipe[s]?.n || 0}</b> · ${U.euros(pipe[s]?.s || 0)}</div></div>`).join('')}</div>
 <h2>Prochains envois automatiques</h2>${next.length ? `<table>${next.map((m) => `<tr><td>${U.esc(KINDS[m.kind] || m.kind)} <span class="pill">${m.channel === 'sms' ? 'SMS' : 'e-mail'}</span><div class="small muted">${U.esc([m.first_name, m.last_name].filter(Boolean).join(' ') || m.to_addr)}</div></td><td class="small">${U.frDate(m.scheduled_at)}</td></tr>`).join('')}</table>` : '<div class="card muted">Aucun envoi programmé.</div>'}</div></div>
 <p style="margin-top:18px"><a class="btn" href="/app/demandes/nouvelle">+ Ajouter un devis / une demande</a></p>`, 'home'));
@@ -107,6 +110,7 @@ ${l.opt_out_sms || l.opt_out_email ? `<div class="banner">Ce client s'est désin
 <div style="flex:0 0 auto"><button class="btn">${l.status === 'devis_envoye' ? 'Relancer à nouveau' : "J'ai envoyé le devis"}</button></div></form>
 <p class="small muted">Relances automatiques à J+${E.settingsOf(req.account).relances.days.join(', J+')} tant que le client n'a pas répondu.</p>
 <div class="actions">${act('rdv', '📅 Visite prévue')}${act('accepte', '✔ Devis signé', 'ok')}${act('termine', '🏁 Chantier terminé → demander un avis')}${act('refuse', 'Refusé')}${act('perdu', 'Sans suite')}${l.status !== 'nouveau' ? act('nouveau', 'Remettre en « nouvelle »') : ''}</div></div>
+${visitCard(req.account, l)}
 <div class="card" style="margin-top:14px"><h3>Coordonnées</h3><form method="post" action="/app/demandes/${l.id}/modifier">
 <div class="row">${f('first_name', 'Prénom')}${f('last_name', 'Nom')}</div><div class="row">${f('phone', 'Mobile')}${f('email', 'E-mail', 'email')}</div>
 <div class="row">${f('address', 'Adresse')}${f('postal_code', 'CP')}${f('city', 'Ville')}</div>
@@ -137,6 +141,32 @@ ${l.opt_out_sms || l.opt_out_email ? `<div class="banner">Ce client s'est désin
     E.processDue(db).catch(() => {});
     const msg = { devis_envoye: 'Relances programmées. Elles s\'arrêtent dès que le client répond ou que vous changez le statut.', termine: "Chantier terminé : la demande d'avis Google est programmée.", accepte: 'Bravo ! Les relances sont arrêtées.' }[status] || 'Statut mis à jour.';
     back(res, `/app/demandes/${l.id}`, msg);
+  });
+  const gcal = (a, l) => {
+    const c = V.config(a), start = new Date(l.visit_at), p = U.parisParts(start);
+    const slot = c.slotList.find(([x]) => Math.abs(x - (p.h + p.min / 60)) < 0.01);
+    const end = new Date(start.getTime() + (slot ? (slot[1] - slot[0]) : 2) * 3600000);
+    const f = (d) => d.toISOString().replace(/[-:]|\.\d{3}/g, '');
+    const q = new URLSearchParams({ action: 'TEMPLATE', text: `Visite ${[l.first_name, l.last_name].filter(Boolean).join(' ')} (${l.work_type || 'devis'})`, dates: `${f(start)}/${f(end)}`,
+      location: [l.address, l.postal_code, l.city].filter(Boolean).join(' '), details: `Tél : ${U.displayPhone(l.phone)}\n${E.BASE()}/app/demandes/${l.id}` });
+    return `https://calendar.google.com/calendar/render?${q}`;
+  };
+  function visitCard(a, l) {
+    const opts = V.available(db, a, { keep: l.visit_at });
+    const sel = `<select name="visit"><option value="">Choisir un créneau…</option>${opts.map((d) => `<optgroup label="${U.esc(d.label)}">${d.slots.map((s) => `<option value="${s.iso}" ${s.iso === l.visit_at ? 'selected' : ''}>${U.esc(d.label)}, ${s.text}</option>`).join('')}</optgroup>`).join('')}</select>`;
+    const past = l.visit_at && new Date(l.visit_at) < new Date();
+    return `<div class="card" style="margin-top:14px"><h3>📅 Visite</h3>${l.visit_at ? `<p><b>${U.esc(V.label(l.visit_at, a))}</b>${past ? ' <span class="small muted">(passée)</span>' : ''}</p><p class="small"><a href="${U.esc(gcal(a, l))}" target="_blank" rel="noopener">Ajouter à mon agenda Google</a></p>` : '<p class="muted small">Aucune visite prévue.</p>'}
+${opts.length ? `<form method="post" action="/app/demandes/${l.id}/visite" class="row" style="align-items:flex-end"><div>${sel}</div><div style="flex:0 0 auto"><button class="btn sm">${l.visit_at ? 'Déplacer' : 'Fixer la visite'}</button></div></form>
+<p class="small muted">Le client reçoit une confirmation avec la date, puis un rappel par SMS la veille.</p>` : '<p class="small muted">Aucun créneau libre : vérifiez vos créneaux de visite dans Réglages.</p>'}
+${l.visit_at && !past ? `<form method="post" action="/app/demandes/${l.id}/visite"><input type="hidden" name="visit" value=""><button class="btn sm sec">Annuler la visite</button></form>` : ''}</div>`;
+  }
+  r.post('/demandes/:id/visite', (req, res) => {
+    const l = lead(req); if (!l) return res.redirect('/app/demandes');
+    const iso = String(req.body.visit || '');
+    if (iso && !V.isAvailable(db, req.account, iso, { keep: l.visit_at })) return res.redirect(`/app/demandes/${l.id}?err=` + encodeURIComponent('Ce créneau n\'est plus libre.'));
+    E.setVisit(db, req.account, l.id, iso || null);
+    E.processDue(db).catch(() => {});
+    back(res, `/app/demandes/${l.id}`, iso ? 'Visite enregistrée, le client est prévenu.' : 'Visite annulée.');
   });
   r.post('/demandes/:id/modifier', (req, res) => {
     const l = lead(req); if (!l) return res.redirect('/app/demandes');
@@ -260,6 +290,11 @@ ${chk('avis_enabled', s.avis.enabled, "<b>Demandes d'avis Google</b> après « C
 ${chk('ent_enabled', s.entretien.enabled, "<b>Rappel d'entretien</b> après « Chantier terminé », puis chaque année")}
 <div class="row"><div><label>Envoyer après (mois)</label><input name="ent_months" type="number" min="1" max="36" value="${s.entretien.months}"></div><div></div></div>
 <div class="row">${chk('ent_sms', s.entretien.sms, 'par SMS')}${chk('ent_email', s.entretien.email, 'par e-mail')}</div><hr>
+${chk('vis_enabled', s.visites.enabled, '<b>Réservation de visite</b> : le client choisit un créneau libre dans le formulaire')}
+<label>Jours de visite</label><div class="row">${['lun', 'mar', 'mer', 'jeu', 'ven', 'sam'].map((d) => chk(`vis_day_${d}`, s.visites.days.includes(d), V.DAY_LABELS[d])).join('')}</div>
+<div class="row"><div><label>Créneaux</label><input name="vis_slots" value="${U.esc(s.visites.slots)}" placeholder="8h-10h, 10h-12h, 13h-15h, 15h-17h"></div><div style="flex:0 0 140px"><label>Visites par créneau</label><input name="vis_per" type="number" min="1" max="5" value="${s.visites.per_slot}"></div></div>
+<div class="row"><div><label>Délai minimum (heures)</label><input name="vis_min" type="number" min="0" max="168" value="${s.visites.min_hours}"></div><div><label>Réservable sur (jours)</label><input name="vis_horizon" type="number" min="1" max="60" value="${s.visites.horizon_days}"></div></div>
+<div class="row"><div><label>Congés : fermé du</label><input name="vis_cf" type="date" value="${U.esc(s.visites.closed_from)}"></div><div><label>au</label><input name="vis_ct" type="date" value="${U.esc(s.visites.closed_to)}"></div></div><hr>
 ${chk('appel_enabled', s.appel.enabled, '<b>SMS automatique après un appel manqué</b>')}
 ${chk('conf_enabled', s.confirmation.enabled, '<b>Accusé de réception</b> au client après une demande')}<hr>
 <h3>Alertes pour vous</h3><div class="row">${chk('notif_email', s.notif.email, 'par e-mail')}${chk('notif_sms', s.notif.sms, 'par SMS')}</div>${chk('rapport', s.rapport.enabled, 'Bilan mensuel par e-mail')}
@@ -276,6 +311,10 @@ ${Object.keys(T).filter((k) => k !== 'appel_vocal').map((k) => tpl(k, k.replace(
     s.relances = { enabled: !!b.rel_enabled, days: [n(b.rel_d1, 2), n(b.rel_d2, 7), n(b.rel_d3, 14)].filter((d) => d > 0), sms: !!b.rel_sms, email: !!b.rel_email };
     s.avis = { enabled: !!b.avis_enabled, delay_hours: n(b.avis_delay, 3), reminder_days: n(b.avis_rem, 4), sms: !!b.avis_sms, email: !!b.avis_email };
     s.appel = { enabled: !!b.appel_enabled };
+    const ymd = (x) => (/^\d{4}-\d{2}-\d{2}$/.test(x || '') ? x : '');
+    const slots = V.parseSlots(b.vis_slots);
+    s.visites = { enabled: !!b.vis_enabled, days: ['lun', 'mar', 'mer', 'jeu', 'ven', 'sam'].filter((d) => b[`vis_day_${d}`]), slots: slots.length ? V.slotsText(slots) : s.visites.slots,
+      per_slot: Math.min(5, Math.max(1, n(b.vis_per, 1))), min_hours: Math.min(168, Math.max(0, n(b.vis_min, 18))), horizon_days: Math.min(60, Math.max(1, n(b.vis_horizon, 14))), closed_from: ymd(b.vis_cf), closed_to: ymd(b.vis_ct) };
     s.entretien = { enabled: !!b.ent_enabled, months: Math.min(36, Math.max(1, n(b.ent_months, 12))), sms: !!b.ent_sms, email: !!b.ent_email };
     s.confirmation = { ...s.confirmation, enabled: !!b.conf_enabled };
     s.notif = { email: !!b.notif_email, sms: !!b.notif_sms };

@@ -5,6 +5,7 @@ Une seule application web, avec un compte par artisan. Elle regroupe tout ce que
 | Fonction | Ce que voit l'artisan | Ce que reçoit son client |
 |---|---|---|
 | **Formulaire de devis** | Chaque demande arrive dans son tableau de bord, avec une alerte par e-mail (et par SMS en option) | Un accusé de réception immédiat par SMS et par e-mail |
+| **Réservation de visite** | Les visites réservées arrivent dans « Prochaines visites », avec un lien « Ajouter à mon agenda Google ». Il peut déplacer ou annuler une visite. Jours, créneaux et congés se règlent dans Réglages. | Il choisit lui-même un créneau libre dans le formulaire (ou dans le lien envoyé après un appel manqué), reçoit une confirmation, puis un SMS de rappel la veille. |
 | **Relance automatique des devis** | Il clique sur « J'ai envoyé le devis » et indique le montant. C'est tout. | Des relances à J+2, J+7 et J+14 par SMS et par e-mail, avec des boutons « J'accepte », « Rappelez-moi » et « Je ne donne pas suite ». Les relances s'arrêtent dès qu'il répond. |
 | **Avis Google** | Il clique sur « Chantier terminé » | Une demande d'avis 3 h plus tard, puis un rappel 4 jours après s'il n'a pas cliqué |
 | **Rappel d'entretien** | Rien à faire : il part tout seul 12 mois après « Chantier terminé » (délai réglable), puis chaque année. Pour un ancien client, « Ajouter » avec la date du dernier passage. | Un SMS et un e-mail avec un lien pour choisir un jour et un créneau. Sa demande arrive comme une nouvelle fiche. |

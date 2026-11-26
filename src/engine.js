@@ -2,6 +2,7 @@
 const U = require('./util');
 const { mergeSettings, KINDS, STATUSES } = require('./defaults');
 const providers = require('./providers');
+const V = require('./visits');
 
 const BASE = () => (process.env.BASE_URL || 'http://localhost:3000').replace(/\/$/, '');
 const now = () => new Date();
@@ -26,6 +27,7 @@ function varsFor(account, lead = {}) {
     lien: lead.token ? `${BASE()}/c/${lead.token}` : '',
     lien_avis: lead.token ? `${BASE()}/avis/${lead.token}` : account.google_review_url || '',
     lien_rdv: `${BASE()}/rdv/${account.slug}${lead.token ? `?l=${lead.token}` : ''}`,
+    visite: lead.visit_at ? V.label(lead.visit_at, account) : '',
   };
 }
 const fill = (tpl, vars) => U.render(tpl, vars).replace(/Bonjour ,/g, 'Bonjour,').replace(/ +/g, ' ').replace(/ \./g, '.').trim();
@@ -107,18 +109,22 @@ function createLead(db, account, data, { source = 'formulaire', notify = true, c
   const r = db.prepare(`INSERT INTO leads (account_id, first_name, last_name, phone, email, address, postal_code, city, work_type, message, preferred_slot, source, status, consent, token, created_at, updated_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(account.id, (data.first_name || '').trim(), (data.last_name || '').trim(), phone, email,
     (data.address || '').trim(), (data.postal_code || '').trim(), (data.city || '').trim(), (data.work_type || '').trim(), (data.message || '').trim(),
-    (data.preferred_slot || '').trim(), source, data.status || 'nouveau', data.consent ? 1 : 0, U.token(), U.iso(now()), U.iso(now()));
+    (data.preferred_slot || '').trim(), source, data.visit_at ? 'rdv' : data.status || 'nouveau', data.consent ? 1 : 0, U.token(), U.iso(now()), U.iso(now()));
+  if (data.visit_at) db.prepare('UPDATE leads SET visit_at=? WHERE id=?').run(data.visit_at, Number(r.lastInsertRowid));
   const lead = getLead(db, Number(r.lastInsertRowid));
-  logEvent(db, account.id, lead.id, 'creation', `Demande reçue (${source})`);
+  logEvent(db, account.id, lead.id, 'creation', `Demande reçue (${source})${lead.visit_at ? ` · visite réservée ${V.label(lead.visit_at, account)}` : ''}`);
   const s = settingsOf(account);
-  if (confirm && s.confirmation.enabled) {
+  if (lead.visit_at) {
+    // Visite réservée par le client : confirmation avec la date, puis rappel la veille.
+    if (confirm) scheduleVisitMessages(db, account, lead, { confirmNow: true });
+  } else if (confirm && s.confirmation.enabled) {
     if (s.confirmation.sms) schedule(db, account, lead, 'confirmation', 'sms', now(), { respectWindow: false });
     if (s.confirmation.email) schedule(db, account, lead, 'confirmation', 'email', now(), { respectWindow: false });
   }
   if (notify) {
     const who = [lead.first_name, lead.last_name].filter(Boolean).join(' ') || U.displayPhone(lead.phone) || lead.email;
-    notifyArtisan(db, account, lead.id, `Nouvelle demande : ${who}`,
-      `Nouvelle demande de ${who}${lead.city ? ' (' + lead.city + ')' : ''}.\nTravaux : ${lead.work_type || '-'}\nTél : ${U.displayPhone(lead.phone) || '-'}\nE-mail : ${lead.email || '-'}\n${lead.preferred_slot ? 'Disponibilités : ' + lead.preferred_slot + '\n' : ''}Message : ${lead.message || '-'}`);
+    notifyArtisan(db, account, lead.id, lead.visit_at ? `📅 Visite réservée : ${who}, ${V.label(lead.visit_at, account)}` : `Nouvelle demande : ${who}`,
+      `${lead.visit_at ? `Visite réservée : ${V.label(lead.visit_at, account)}\n` : ''}Nouvelle demande de ${who}${lead.city ? ' (' + lead.city + ')' : ''}.\nTravaux : ${lead.work_type || '-'}\nTél : ${U.displayPhone(lead.phone) || '-'}\nE-mail : ${lead.email || '-'}\n${lead.preferred_slot ? 'Disponibilités : ' + lead.preferred_slot + '\n' : ''}Message : ${lead.message || '-'}`);
   }
   return lead;
 }
@@ -159,6 +165,34 @@ function scheduleReview(db, account, lead, from = now()) {
   }
   updateLead(db, lead.id, { review_requested_at: U.iso(now()) });
   return n;
+}
+
+/** Messages liés à une visite : confirmation (si demandée) + rappel la veille vers 17 h. */
+function scheduleVisitMessages(db, account, lead, { confirmNow = false } = {}) {
+  cancelPending(db, lead.id, 'rappel_visite', 'visite modifiée');
+  cancelPending(db, lead.id, 'visite', 'visite modifiée');
+  if (!lead.visit_at) return;
+  const s = settingsOf(account);
+  if (confirmNow && s.confirmation.enabled) {
+    if (s.confirmation.sms) schedule(db, account, lead, 'visite', 'sms', now(), { respectWindow: false });
+    if (s.confirmation.email) schedule(db, account, lead, 'visite', 'email', now(), { respectWindow: false });
+  }
+  const v = U.parisParts(new Date(lead.visit_at));
+  const eve = U.parisParts(U.addDays(new Date(lead.visit_at), -1));
+  const at = V.localToUtc(eve.y, eve.m, eve.d, Math.min(17, s.window.end - 1));
+  if (at > U.addHours(now(), 2) && U.inWindow(at, s.window)) schedule(db, account, lead, 'rappel_visite', 'sms', at, { respectWindow: false });
+  return v;
+}
+
+/** L'artisan fixe, déplace ou annule une visite. */
+function setVisit(db, account, leadId, iso, { notifyClient = true } = {}) {
+  const lead = getLead(db, leadId);
+  if (!lead || lead.account_id !== account.id) throw new Error('Demande introuvable');
+  updateLead(db, leadId, { visit_at: iso || null, ...(iso && ['nouveau', 'rdv'].includes(lead.status) ? { status: 'rdv' } : {}) });
+  const fresh = getLead(db, leadId);
+  scheduleVisitMessages(db, account, fresh, { confirmNow: !!iso && notifyClient });
+  logEvent(db, account.id, leadId, 'visite', iso ? `Visite fixée : ${V.label(iso, account)}` : 'Visite annulée');
+  return fresh;
 }
 
 /** Rappel d'entretien N mois après le chantier (puis chaque année tant que le client ne se désinscrit pas). */
@@ -330,6 +364,7 @@ async function processDue(db, at = now()) {
       if (lead && m.kind !== 'notif' && isOptedOut(db, lead, m.channel)) { cancel('désinscrit'); continue; }
       if (lead && m.kind.startsWith('relance') && lead.status !== 'devis_envoye') { cancel('devis plus en attente'); continue; }
       if (lead && m.kind === 'avis_relance' && lead.review_clicked_at) { cancel('avis déjà cliqué'); continue; }
+      if (lead && m.kind === 'rappel_visite' && (!lead.visit_at || new Date(lead.visit_at) <= at || ['refuse', 'perdu'].includes(lead.status))) { cancel('visite passée ou annulée'); continue; }
       if (m.respect_window) {
         const s = settingsOf(account);
         if (!U.inWindow(at, s.window)) { db.prepare('UPDATE messages SET scheduled_at=? WHERE id=?').run(U.iso(U.nextAllowed(at, s.window)), m.id); continue; }
@@ -358,4 +393,4 @@ function startScheduler(db, everyMs = 60000) {
   return setInterval(tick, everyMs);
 }
 
-module.exports = { notifyArtisan, createLead, setStatus, scheduleMaintenance, addMonths, clientChoice, missedCall, optOutPhone, optOutEmail, processDue, startScheduler, stats, monthRange, currentMonth, prevMonth, monthLabel, reportText, monthlyReports, logEvent, updateLead, getLead, settingsOf, schedule, varsFor, fill, emailHtml, BASE };
+module.exports = { setVisit, scheduleVisitMessages, notifyArtisan, createLead, setStatus, scheduleMaintenance, addMonths, clientChoice, missedCall, optOutPhone, optOutEmail, processDue, startScheduler, stats, monthRange, currentMonth, prevMonth, monthLabel, reportText, monthlyReports, logEvent, updateLead, getLead, settingsOf, schedule, varsFor, fill, emailHtml, BASE };

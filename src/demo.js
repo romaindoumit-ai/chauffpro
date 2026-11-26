@@ -33,7 +33,12 @@ async function seedDemo(db, { email, slug, password, isDemo = 1 } = {}) {
       message: 'Logement : Maison, 110 m² · Chauffage actuel : Gaz · Délai : Dans le mois' }, { notify: false, confirm: false, source: daysAgo % 2 ? 'formulaire' : 'site' });
     db.prepare('UPDATE leads SET created_at=?, updated_at=? WHERE id=?').run(ago(daysAgo + 2), ago(daysAgo), l.id);
     if (status === 'nouveau') { db.prepare('UPDATE leads SET created_at=? WHERE id=?').run(U.iso(U.addHours(new Date(), -2)), l.id); continue; }
-    if (status === 'rdv') { E.setStatus(db, a, l.id, 'rdv'); continue; }
+    if (status === 'rdv') {
+      E.setStatus(db, a, l.id, 'rdv');
+      const day = require('./visits').available(db, a)[1];
+      if (day) E.setVisit(db, a, l.id, day.slots[Math.min(1, day.slots.length - 1)].iso, { notifyClient: false });
+      continue;
+    }
     E.setStatus(db, a, l.id, 'devis_envoye', { quote_amount: amount, quote_ref: `D2026-${100 + l.id}` });
     // On « vieillit » le devis : les relances déjà passées sont marquées comme envoyées.
     const sentAt = U.addDays(new Date(), -daysAgo);

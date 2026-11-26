@@ -149,3 +149,42 @@ test('appli installable + notification envoyée au téléphone à chaque nouvell
   assert.match(sent[0].payload.title, /Nouvelle demande : Lotte/);
   assert.match(sent[0].payload.url, /^\/app\/demandes\/\d+$/);
 });
+
+test('le client réserve un créneau de visite dans le formulaire ; le créneau disparaît ; rappel la veille', async (t) => {
+  const s = await boot();
+  t.after(() => s.server.close());
+  await s.login('admin@test.be', 'admin-secret');
+  let r = await s.req('/admin/comptes', { method: 'POST', form: { company_name: 'Chauffage Dubois', email: 'dubois@test.be', country: 'BE' } });
+  const pw = new URL(r.location, s.base).searchParams.get('pw');
+  s.resetCookie();
+  r = await s.req('/f/chauffage-dubois');
+  assert.match(r.text, /Choisissez un créneau pour la visite/);
+  const slots = [...r.text.matchAll(/name="visit" value="([^"]+)"/g)].map((m) => m[1]).filter(Boolean);
+  assert.ok(slots.length >= 8, `${slots.length} créneaux`);
+  const pick = slots[3];
+  const form = { work_type: 'Remplacement de chaudière', first_name: 'Lotte', phone: '0478 12 34 56', email: 'lotte@x.be', postal_code: '1050', consent: '1', visit: pick };
+  r = await s.req('/f/chauffage-dubois', { method: 'POST', form });
+  assert.equal(r.status, 302);
+  const lead = s.db.prepare('SELECT * FROM leads').get();
+  assert.equal(lead.status, 'rdv');
+  assert.equal(lead.visit_at, pick);
+  r = await s.req(r.location);
+  assert.match(r.text, /Votre visite est réservée/);
+  const m = s.db.prepare('SELECT kind, channel, body FROM messages WHERE lead_id=?').all(lead.id);
+  assert.ok(m.some((x) => x.kind === 'visite' && x.channel === 'sms' && /passera chez vous/.test(x.body)));
+  assert.ok(m.some((x) => x.kind === 'notif' && /Visite réservée/.test(x.body)));
+  // Le créneau n'est plus proposé, et une 2e réservation du même créneau est refusée
+  assert.doesNotMatch((await s.req('/f/chauffage-dubois')).text, new RegExp(`value="${pick}"`));
+  r = await s.req('/f/chauffage-dubois', { method: 'POST', form: { ...form, first_name: 'Jan', phone: '0479 00 00 00' } });
+  assert.equal(r.status, 400);
+  assert.match(r.text, /vient d(&#39;|')être réservé/);
+  // L'artisan voit la visite et peut la déplacer
+  await s.login('dubois@test.be', pw);
+  r = await s.req(`/app/demandes/${lead.id}`);
+  assert.match(r.text, /calendar\.google\.com/);
+  r = await s.req(`/app/demandes/${lead.id}/visite`, { method: 'POST', form: { visit: slots[6] } });
+  assert.match(decodeURIComponent(r.location), /Visite enregistrée/);
+  assert.equal(s.db.prepare('SELECT visit_at FROM leads').get().visit_at, slots[6]);
+  assert.equal(s.db.prepare("SELECT COUNT(*) n FROM messages WHERE kind='rappel_visite' AND status='en_attente'").get().n <= 1, true);
+  assert.match((await s.req('/app')).text, /Prochaines visites/);
+});

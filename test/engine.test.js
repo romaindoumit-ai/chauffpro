@@ -155,3 +155,30 @@ test("un seul rappel d'entretien en attente par client", () => {
   assert.equal(msgs(db, l1.id).filter((m) => m.kind === 'entretien' && m.status === 'en_attente').length, 0);
   assert.equal(msgs(db, l2.id).filter((m) => m.kind === 'entretien' && m.status === 'en_attente').length, 1);
 });
+
+test('créneaux de visite : jours ouvrés, jours fériés et congés exclus', () => {
+  const V = require('../src/visits');
+  const { db, a } = setup('BE');
+  const from = new Date('2027-07-16T08:00:00Z'); // vendredi
+  let days = V.available(db, a, { from });
+  assert.ok(!days.some((d) => d.ymd === '2027-07-17' || d.ymd === '2027-07-18')); // week-end
+  assert.ok(!days.some((d) => d.ymd === '2027-07-21')); // fête nationale
+  assert.ok(days.some((d) => d.ymd === '2027-07-19'));
+  assert.equal(days.find((d) => d.ymd === '2027-07-19').slots[0].iso, '2027-07-19T06:00:00.000Z'); // 8h à Bruxelles (été)
+  db.prepare('UPDATE accounts SET settings=? WHERE id=?').run(JSON.stringify({ visites: { closed_from: '2027-07-19', closed_to: '2027-07-23' } }), a.id);
+  days = V.available(db, db.prepare('SELECT * FROM accounts').get(), { from });
+  assert.ok(!days.some((d) => d.ymd >= '2027-07-19' && d.ymd <= '2027-07-23'));
+});
+
+test('rappel de visite la veille, annulé si la visite est annulée', async () => {
+  const V = require('../src/visits');
+  const { db, a } = setup('BE');
+  const slot = V.available(db, a)[2].slots[0].iso;
+  const l = E.createLead(db, a, { first_name: 'Lotte', phone: '0478123456', consent: 1, visit_at: slot }, { notify: false });
+  const rem = msgs(db, l.id).find((m) => m.kind === 'rappel_visite');
+  assert.ok(rem);
+  assert.ok(new Date(rem.scheduled_at) < new Date(slot));
+  assert.ok(new Date(slot) - new Date(rem.scheduled_at) < 86400000 * 1.1);
+  E.setVisit(db, a, l.id, null);
+  assert.equal(msgs(db, l.id).filter((m) => m.kind === 'rappel_visite' && m.status === 'en_attente').length, 0);
+});

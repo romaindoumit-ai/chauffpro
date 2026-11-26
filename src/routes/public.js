@@ -3,6 +3,7 @@ const express = require('express');
 const U = require('../util');
 const E = require('../engine');
 const { publicLayout, head } = require('../views');
+const V = require('../visits');
 
 const WORK_TYPES = ['Installation pompe à chaleur', 'Remplacement de chaudière', 'Entretien ou dépannage chaudière', 'Entretien ou dépannage pompe à chaleur',
   'Chauffe-eau / ballon thermodynamique', 'Plancher chauffant / radiateurs', 'Climatisation', 'Autre demande'];
@@ -34,6 +35,7 @@ ${error ? `<div class="flash err">${U.esc(error)}</div>` : ''}
 <div class="row"><div><label>Prénom *</label><input name="first_name" required value="${v('first_name')}"></div><div><label>Nom</label><input name="last_name" value="${v('last_name')}"></div></div>
 <div class="row"><div><label>Téléphone mobile *</label><input name="phone" type="tel" required value="${v('phone')}" placeholder="${U.C(a).mobileExample}"></div><div><label>E-mail</label><input name="email" type="email" value="${v('email')}"></div></div>
 <div class="row"><div><label>Code postal *</label><input name="postal_code" required value="${v('postal_code')}"></div><div><label>Ville</label><input name="city" value="${v('city')}"></div></div>
+${V.picker(db, a, { selected: values.visit || '' })}
 <label>Précisions (marque, problème, disponibilités…)</label><textarea name="message">${v('message')}</textarea>
 <input class="hp" name="website" tabindex="-1" autocomplete="off">
 <label class="chk"><input type="checkbox" name="consent" value="1" required> J'accepte que ${U.esc(a.company_name)} me recontacte par téléphone, SMS ou e-mail au sujet de ma demande. <a href="/s/${a.slug}/confidentialite" target="_blank">Données personnelles</a></label>
@@ -50,10 +52,11 @@ ${error ? `<div class="flash err">${U.esc(error)}</div>` : ''}
     if (!b.first_name || !b.work_type || !b.postal_code) error = 'Merci de remplir les champs obligatoires.';
     else if (!phone) error = 'Le numéro de téléphone semble incorrect.';
     else if (!b.consent) error = 'Merci de cocher la case de consentement.';
+    else if (b.visit && !V.isAvailable(db, a, b.visit)) { error = 'Ce créneau vient d\'être réservé. Choisissez-en un autre.'; b.visit = ''; }
     if (error) return res.status(400).send(publicLayout(`Demande de devis · ${a.company_name}`, `<div class="card"><h1>Demande de devis gratuit</h1>${quoteForm(a, { embed, values: b, error })}</div>`, { color: a.primary_color, embed }));
     const details = [b.housing && `Logement : ${b.housing}${b.surface ? `, ${b.surface} m²` : ''}`, b.energy && `Chauffage actuel : ${b.energy}`, b.delay && `Délai : ${b.delay}`].filter(Boolean).join(' · ');
-    E.createLead(db, a, { ...b, phone, message: [details, b.message].filter(Boolean).join('\n'), consent: 1 }, { source });
-    res.redirect(`/f/${a.slug}/merci${embed ? '?embed=1' : ''}`);
+    const lead = E.createLead(db, a, { ...b, phone, visit_at: b.visit || null, message: [details, b.message].filter(Boolean).join('\n'), consent: 1 }, { source });
+    res.redirect(`/f/${a.slug}/merci?l=${lead.token}${embed ? '&embed=1' : ''}`);
   }
 
   // ---- Formulaire de devis (lien direct ou intégré en iframe) ----
@@ -66,7 +69,9 @@ ${error ? `<div class="flash err">${U.esc(error)}</div>` : ''}
   r.post('/f/:slug', (req, res) => { const a = bySlug(req.params.slug); if (!a) return notFound(res); handleQuote(req, res, a, req.query.src === 'site' ? 'site' : 'formulaire'); });
   r.get('/f/:slug/merci', (req, res) => {
     const a = bySlug(req.params.slug); if (!a) return notFound(res);
-    res.send(publicLayout('Merci !', `<div class="card"><h1>✅ Demande envoyée !</h1><p>Merci, ${U.esc(a.company_name)} a bien reçu votre demande et vous recontacte très vite.</p>${a.phone ? `<p>Pour une urgence : <a href="tel:${U.esc(a.phone)}">${U.esc(U.displayPhone(a.phone))}</a></p>` : ''}</div>`, { color: a.primary_color, embed: !!req.query.embed }));
+    const lead = req.query.l ? byToken(req.query.l) : null;
+    const visit = lead && lead.account_id === a.id && lead.visit_at ? V.label(lead.visit_at, a) : '';
+    res.send(publicLayout('Merci !', `<div class="card"><h1>✅ Demande envoyée !</h1>${visit ? `<p>Votre visite est réservée : <b>${U.esc(visit)}</b>. Vous allez recevoir une confirmation.</p>` : `<p>Merci, ${U.esc(a.company_name)} a bien reçu votre demande et vous recontacte très vite.</p>`}${a.phone ? `<p>Pour une urgence : <a href="tel:${U.esc(a.phone)}">${U.esc(U.displayPhone(a.phone))}</a></p>` : ''}</div>`, { color: a.primary_color, embed: !!req.query.embed }));
   });
 
   // ---- Mini-site vitrine ----
@@ -103,13 +108,14 @@ ${a.google_review_url ? `<p><a href="${U.esc(a.google_review_url)}" target="_bla
     const lead = req.query.l ? byToken(req.query.l) : null;
     // Ancien client qui revient (rappel d'entretien) : on pré-sélectionne l'entretien adapté.
     const pre = lead && lead.status === 'termine' ? (/pompe|clim/i.test(lead.work_type || '') ? 'Entretien ou dépannage pompe à chaleur' : 'Entretien ou dépannage chaudière') : '';
+    const pick = V.picker(db, a);
     const days = []; let d = new Date();
-    while (days.length < 8) { d = U.addDays(d, 1); const p = U.parisParts(d); if (!p.wd.startsWith('dim')) days.push(d.toLocaleDateString('fr-FR', { timeZone: 'Europe/Brussels', weekday: 'long', day: 'numeric', month: 'long' })); }
+    while (!pick && days.length < 8) { d = U.addDays(d, 1); const p = U.parisParts(d); if (!p.wd.startsWith('dim')) days.push(d.toLocaleDateString('fr-FR', { timeZone: 'Europe/Brussels', weekday: 'long', day: 'numeric', month: 'long' })); }
     res.send(publicLayout(`Rendez-vous · ${a.company_name}`, `<div class="card"><div class="muted small">${U.esc(a.company_name)}</div><h1>Être rappelé ou prendre rendez-vous</h1>
 <form method="post"><input type="hidden" name="l" value="${U.esc(req.query.l || '')}">
 <label>Votre besoin *</label><select name="work_type" required>${WORK_TYPES.map((w) => `<option ${w === pre ? 'selected' : ''}>${w}</option>`).join('')}</select>
-<div class="row"><div><label>Jour souhaité</label><select name="day">${days.map((x) => `<option>${x}</option>`).join('')}</select></div>
-<div><label>Créneau</label><select name="slot"><option>Matin (8h-12h)</option><option>Après-midi (13h-18h)</option><option>Rappelez-moi dès que possible</option></select></div></div>
+${pick || `<div class="row"><div><label>Jour souhaité</label><select name="day">${days.map((x) => `<option>${x}</option>`).join('')}</select></div>
+<div><label>Créneau</label><select name="slot"><option>Matin (8h-12h)</option><option>Après-midi (13h-18h)</option><option>Rappelez-moi dès que possible</option></select></div></div>`}
 <div class="row"><div><label>Prénom *</label><input name="first_name" required value="${U.esc(lead?.first_name || '')}"></div><div><label>Nom</label><input name="last_name" value="${U.esc(lead?.last_name || '')}"></div></div>
 <div class="row"><div><label>Téléphone *</label><input name="phone" required value="${U.esc(U.displayPhone(lead?.phone || ''))}"></div><div><label>Code postal / ville *</label><input name="city" required value="${U.esc(lead?.city || '')}"></div></div>
 <label>Précisions</label><textarea name="message"></textarea><input class="hp" name="website" tabindex="-1" autocomplete="off">
@@ -123,21 +129,24 @@ ${a.google_review_url ? `<p><a href="${U.esc(a.google_review_url)}" target="_bla
     if (limited(req.ip)) return res.status(429).send('Trop de demandes');
     const phone = U.normalizePhone(b.phone, a.country);
     if (!phone || !b.first_name || !b.consent) return res.redirect(`/rdv/${a.slug}?l=${encodeURIComponent(b.l || '')}`);
-    const slot = `${b.day || ''} · ${b.slot || ''}`;
+    const visit = b.visit && V.isAvailable(db, a, b.visit) ? b.visit : null;
+    const slot = visit ? V.label(visit, a) : b.day ? `${b.day} · ${b.slot || ''}` : 'Rappelez-moi dès que possible';
     const existing = b.l ? byToken(b.l) : null;
     const closed = existing && ['termine', 'accepte', 'refuse', 'perdu'].includes(existing.status);
     if (existing && existing.account_id === a.id && closed) {
       // Ancien client (ex. rappel d'entretien) : nouvelle fiche, l'historique du chantier précédent reste intact.
-      E.createLead(db, a, { ...b, phone, email: existing.email, address: existing.address, postal_code: existing.postal_code, last_name: b.last_name || existing.last_name, preferred_slot: slot, consent: 1 }, { source: 'rdv' });
+      E.createLead(db, a, { ...b, phone, email: existing.email, address: existing.address, postal_code: existing.postal_code, last_name: b.last_name || existing.last_name, preferred_slot: slot, visit_at: visit, consent: 1 }, { source: 'rdv' });
     } else if (existing && existing.account_id === a.id) {
       E.updateLead(db, existing.id, { first_name: b.first_name, last_name: b.last_name || '', city: b.city || '', work_type: b.work_type, message: b.message || '', preferred_slot: slot, consent: 1, source: 'rdv' });
       E.logEvent(db, a.id, existing.id, 'rdv', `Demande de RDV : ${slot}`);
+      if (visit) E.setVisit(db, a, existing.id, visit);
       const who = `${b.first_name} ${b.last_name || ''}`.trim();
-      E.notifyArtisan(db, a, existing.id, `📅 Demande de RDV : ${who}`, `${who} (${U.displayPhone(phone)}, ${b.city}) demande un RDV : ${slot}.\nBesoin : ${b.work_type}\n${b.message || ''}`.trim());
+      E.notifyArtisan(db, a, existing.id, `📅 ${visit ? 'Visite réservée' : 'Demande de RDV'} : ${who}`, `${who} (${U.displayPhone(phone)}, ${b.city}) demande un RDV : ${slot}.\nBesoin : ${b.work_type}\n${b.message || ''}`.trim());
     } else {
-      E.createLead(db, a, { ...b, phone, preferred_slot: slot, consent: 1 }, { source: 'rdv' });
+      E.createLead(db, a, { ...b, phone, preferred_slot: slot, visit_at: visit, consent: 1 }, { source: 'rdv' });
     }
-    res.redirect(`/f/${a.slug}/merci`);
+    const after = existing && existing.account_id === a.id && !closed ? existing : db.prepare('SELECT * FROM leads WHERE account_id=? ORDER BY id DESC LIMIT 1').get(a.id);
+    res.redirect(`/f/${a.slug}/merci${after ? `?l=${after.token}` : ''}`);
   });
 
   // ---- Réponse du client à une relance ----
