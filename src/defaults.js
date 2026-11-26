@@ -4,6 +4,7 @@ const DEFAULT_SETTINGS = {
   relances: { enabled: true, days: [2, 7, 14], sms: true, email: true },
   avis: { enabled: true, delay_hours: 3, reminder_days: 4, sms: true, email: true },
   appel: { enabled: true },
+  entretien: { enabled: true, months: 12, sms: true, email: true }, // rappel d'entretien après « Chantier terminé »
   confirmation: { enabled: true, sms: true, email: true },
   notif: { email: true, sms: false },
   rapport: { enabled: true },
@@ -30,6 +31,10 @@ const DEFAULT_SETTINGS = {
     avis_email: "Bonjour {prenom},\n\nMerci d'avoir fait appel à {entreprise} pour votre {travaux}.\nSi vous êtes satisfait de notre travail, pourriez-vous prendre une minute pour laisser un avis Google ? Cela aide énormément une entreprise locale comme la nôtre.\n\nMerci beaucoup,\n{artisan}",
     avis_relance_sms: "Bonjour {prenom}, petit rappel : si vous avez une minute, votre avis Google nous aiderait vraiment : {lien_avis} Merci ! {entreprise}",
 
+    entretien_sms: "Bonjour {prenom}, c'est {artisan} de {entreprise}. C'est le moment de prévoir l'entretien de votre installation ({travaux}). Choisissez un créneau ici : {lien_rdv} ou appelez le {tel}.",
+    entretien_email_subject: "C'est le moment de l'entretien de votre installation",
+    entretien_email: "Bonjour {prenom},\n\nVotre installation ({travaux}) arrive à la date de son entretien.\nUn entretien régulier garde votre installation sûre et économe, et il est souvent exigé par la garantie et par la réglementation.\n\nChoisissez simplement un jour et un créneau avec le bouton ci-dessous, nous vous confirmons le passage.\n\nÀ bientôt,\n{artisan}\n{entreprise} · {tel}",
+
     appel_sms: "Bonjour, c'est {entreprise}. Désolé, je suis en intervention et n'ai pas pu décrocher. Indiquez votre besoin et vos disponibilités ici, je vous rappelle vite : {lien_rdv}",
     appel_vocal: "Bonjour, vous êtes bien chez {entreprise}. Nous sommes en intervention. Vous allez recevoir un SMS pour prendre rendez-vous. Merci et à très vite.",
   },
@@ -49,7 +54,7 @@ const SOURCES = { formulaire: 'Formulaire de devis', site: 'Site web', appel: 'A
 
 const KINDS = {
   confirmation: 'Accusé de réception', relance_1: 'Relance 1', relance_2: 'Relance 2', relance_3: 'Relance 3',
-  avis: "Demande d'avis", avis_relance: "Rappel d'avis", appel: 'SMS appel manqué', notif: 'Alerte artisan', rapport: 'Bilan mensuel',
+  avis: "Demande d'avis", avis_relance: "Rappel d'avis", entretien: "Rappel d'entretien", appel: 'SMS appel manqué', notif: 'Alerte artisan', rapport: 'Bilan mensuel',
 };
 
 function mergeSettings(raw) {

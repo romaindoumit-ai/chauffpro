@@ -67,6 +67,8 @@ ${rows.length ? `<table><tr><th>Client</th><th>Projet</th><th>Statut</th><th>Mon
 <label>Notes</label><textarea name="message"></textarea>
 <h2>Le devis est déjà envoyé ?</h2><p class="small muted">Si vous remplissez le montant, la demande passe en « Devis envoyé » et les relances automatiques démarrent.</p>
 <div class="row"><div><label>Montant ${U.C(req.account).tax} (€)</label><input name="quote_amount" inputmode="decimal"></div><div><label>N° de devis</label><input name="quote_ref"></div></div>
+<h2>Ancien client à recontacter pour l'entretien ?</h2><p class="small muted">Indiquez la date de votre dernier passage : la fiche est classée « Chantier terminé » (sans demande d'avis) et le rappel d'entretien part ${E.settingsOf(req.account).entretien.months} mois après cette date.</p>
+<div class="row"><div><label>Dernier passage le</label><input name="last_service" type="date" max="${new Date().toISOString().slice(0, 10)}"></div><div></div></div>
 <label class="chk"><input type="checkbox" name="consent" value="1" checked> Le client a accepté d'être recontacté (SMS / e-mail) au sujet de ce devis.</label>
 <p><button class="btn">Enregistrer</button></p></form></div>`, 'demandes'));
   });
@@ -75,6 +77,13 @@ ${rows.length ? `<table><tr><th>Client</th><th>Projet</th><th>Statut</th><th>Mon
     if (!b.phone && !b.email && !b.last_name && !b.first_name) return res.redirect('/app/demandes/nouvelle?err=' + encodeURIComponent('Indiquez au moins un nom, un téléphone ou un e-mail.'));
     const l = E.createLead(db, a, { ...b, consent: b.consent ? 1 : 0 }, { source: 'manuel', notify: false, confirm: false });
     const amount = parseFloat(String(b.quote_amount || '').replace(/\s/g, '').replace(',', '.'));
+    const last = /^\d{4}-\d{2}-\d{2}$/.test(b.last_service || '') ? new Date(`${b.last_service}T10:00:00Z`) : null;
+    if (last && !(amount > 0)) {
+      E.updateLead(db, l.id, { status: 'termine', completed_at: U.iso(last), decided_at: U.iso(last) });
+      const n = E.scheduleMaintenance(db, a, E.getLead(db, l.id), last);
+      E.logEvent(db, a.id, l.id, 'statut', `Ancien client ajouté (dernier passage le ${U.frDate(U.iso(last), false)})${n ? ' · rappel d\'entretien programmé' : ''}`);
+      return back(res, `/app/demandes/${l.id}`, n ? "Client enregistré, le rappel d'entretien est programmé." : "Client enregistré (rappel d'entretien désactivé ou pas de coordonnées).");
+    }
     if (amount > 0) E.setStatus(db, a, l.id, 'devis_envoye', { quote_amount: amount, quote_ref: b.quote_ref || null });
     back(res, `/app/demandes/${l.id}`, amount > 0 ? 'Devis enregistré, les relances automatiques sont programmées.' : 'Demande enregistrée.');
   });
@@ -225,6 +234,9 @@ ${chk('rel_enabled', s.relances.enabled, '<b>Relances de devis</b>')}
 ${chk('avis_enabled', s.avis.enabled, "<b>Demandes d'avis Google</b> après « Chantier terminé »")}
 <div class="row"><div><label>Envoyer après (heures)</label><input name="avis_delay" type="number" min="0" value="${s.avis.delay_hours}"></div><div><label>Rappel après (jours, 0 = aucun)</label><input name="avis_rem" type="number" min="0" value="${s.avis.reminder_days}"></div></div>
 <div class="row">${chk('avis_sms', s.avis.sms, 'par SMS')}${chk('avis_email', s.avis.email, 'par e-mail')}</div><hr>
+${chk('ent_enabled', s.entretien.enabled, "<b>Rappel d'entretien</b> après « Chantier terminé », puis chaque année")}
+<div class="row"><div><label>Envoyer après (mois)</label><input name="ent_months" type="number" min="1" max="36" value="${s.entretien.months}"></div><div></div></div>
+<div class="row">${chk('ent_sms', s.entretien.sms, 'par SMS')}${chk('ent_email', s.entretien.email, 'par e-mail')}</div><hr>
 ${chk('appel_enabled', s.appel.enabled, '<b>SMS automatique après un appel manqué</b>')}
 ${chk('conf_enabled', s.confirmation.enabled, '<b>Accusé de réception</b> au client après une demande')}<hr>
 <h3>Alertes pour vous</h3><div class="row">${chk('notif_email', s.notif.email, 'par e-mail')}${chk('notif_sms', s.notif.sms, 'par SMS')}</div>${chk('rapport', s.rapport.enabled, 'Bilan mensuel par e-mail')}
@@ -241,6 +253,7 @@ ${Object.keys(T).filter((k) => k !== 'appel_vocal').map((k) => tpl(k, k.replace(
     s.relances = { enabled: !!b.rel_enabled, days: [n(b.rel_d1, 2), n(b.rel_d2, 7), n(b.rel_d3, 14)].filter((d) => d > 0), sms: !!b.rel_sms, email: !!b.rel_email };
     s.avis = { enabled: !!b.avis_enabled, delay_hours: n(b.avis_delay, 3), reminder_days: n(b.avis_rem, 4), sms: !!b.avis_sms, email: !!b.avis_email };
     s.appel = { enabled: !!b.appel_enabled };
+    s.entretien = { enabled: !!b.ent_enabled, months: Math.min(36, Math.max(1, n(b.ent_months, 12))), sms: !!b.ent_sms, email: !!b.ent_email };
     s.confirmation = { ...s.confirmation, enabled: !!b.conf_enabled };
     s.notif = { email: !!b.notif_email, sms: !!b.notif_sms };
     s.rapport = { enabled: !!b.rapport };

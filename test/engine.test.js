@@ -129,3 +129,29 @@ test('bilan mensuel envoyé une seule fois le 1er du mois', () => {
   assert.equal(E.monthlyReports(db, first), 1);
   assert.equal(E.monthlyReports(db, first), 0);
 });
+
+test("chantier terminé -> rappel d'entretien 12 mois plus tard, puis chaque année", async () => {
+  const { db, a } = setup('BE');
+  const l = E.createLead(db, a, { first_name: 'Lotte', phone: '0478123456', email: 'lotte@x.be', work_type: 'Remplacement de chaudière', consent: 1 }, { notify: false, confirm: false });
+  E.setStatus(db, a, l.id, 'termine');
+  const ent = msgs(db, l.id).filter((m) => m.kind === 'entretien');
+  assert.deepEqual(ent.map((m) => m.channel).sort(), ['email', 'sms']);
+  const months = (new Date(ent[0].scheduled_at) - Date.now()) / (30.4 * 86400000);
+  assert.ok(months > 11.5 && months < 12.5, `rappel dans ${months} mois`);
+  assert.match(ent.find((m) => m.channel === 'sms').body, /\/rdv\/test\?l=/);
+  // Un an plus tard, les deux partent et l'année suivante est programmée (une seule fois)
+  await E.processDue(db, U.nextAllowed(U.addDays(new Date(), 370), { start: 9, end: 19, country: 'BE' }));
+  const after = msgs(db, l.id).filter((m) => m.kind === 'entretien');
+  assert.equal(after.filter((m) => m.status === 'simule').length, 2);
+  assert.equal(after.filter((m) => m.status === 'en_attente').length, 2);
+});
+
+test("un seul rappel d'entretien en attente par client", () => {
+  const { db, a } = setup('BE');
+  const l1 = E.createLead(db, a, { first_name: 'Lotte', phone: '0478123456', consent: 1 }, { notify: false, confirm: false });
+  E.setStatus(db, a, l1.id, 'termine');
+  const l2 = E.createLead(db, a, { first_name: 'Lotte', phone: '0478 12 34 56', consent: 1 }, { notify: false, confirm: false });
+  E.setStatus(db, a, l2.id, 'termine');
+  assert.equal(msgs(db, l1.id).filter((m) => m.kind === 'entretien' && m.status === 'en_attente').length, 0);
+  assert.equal(msgs(db, l2.id).filter((m) => m.kind === 'entretien' && m.status === 'en_attente').length, 1);
+});

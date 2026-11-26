@@ -101,11 +101,13 @@ ${a.google_review_url ? `<p><a href="${U.esc(a.google_review_url)}" target="_bla
     const a = bySlug(req.params.slug); if (!a) return notFound(res);
     if (a.booking_url) return res.redirect(a.booking_url);
     const lead = req.query.l ? byToken(req.query.l) : null;
+    // Ancien client qui revient (rappel d'entretien) : on pré-sélectionne l'entretien adapté.
+    const pre = lead && lead.status === 'termine' ? (/pompe|clim/i.test(lead.work_type || '') ? 'Entretien ou dépannage pompe à chaleur' : 'Entretien ou dépannage chaudière') : '';
     const days = []; let d = new Date();
     while (days.length < 8) { d = U.addDays(d, 1); const p = U.parisParts(d); if (!p.wd.startsWith('dim')) days.push(d.toLocaleDateString('fr-FR', { timeZone: 'Europe/Brussels', weekday: 'long', day: 'numeric', month: 'long' })); }
     res.send(publicLayout(`Rendez-vous · ${a.company_name}`, `<div class="card"><div class="muted small">${U.esc(a.company_name)}</div><h1>Être rappelé ou prendre rendez-vous</h1>
 <form method="post"><input type="hidden" name="l" value="${U.esc(req.query.l || '')}">
-<label>Votre besoin *</label><select name="work_type" required>${WORK_TYPES.map((w) => `<option>${w}</option>`).join('')}</select>
+<label>Votre besoin *</label><select name="work_type" required>${WORK_TYPES.map((w) => `<option ${w === pre ? 'selected' : ''}>${w}</option>`).join('')}</select>
 <div class="row"><div><label>Jour souhaité</label><select name="day">${days.map((x) => `<option>${x}</option>`).join('')}</select></div>
 <div><label>Créneau</label><select name="slot"><option>Matin (8h-12h)</option><option>Après-midi (13h-18h)</option><option>Rappelez-moi dès que possible</option></select></div></div>
 <div class="row"><div><label>Prénom *</label><input name="first_name" required value="${U.esc(lead?.first_name || '')}"></div><div><label>Nom</label><input name="last_name" value="${U.esc(lead?.last_name || '')}"></div></div>
@@ -123,7 +125,11 @@ ${a.google_review_url ? `<p><a href="${U.esc(a.google_review_url)}" target="_bla
     if (!phone || !b.first_name || !b.consent) return res.redirect(`/rdv/${a.slug}?l=${encodeURIComponent(b.l || '')}`);
     const slot = `${b.day || ''} · ${b.slot || ''}`;
     const existing = b.l ? byToken(b.l) : null;
-    if (existing && existing.account_id === a.id) {
+    const closed = existing && ['termine', 'accepte', 'refuse', 'perdu'].includes(existing.status);
+    if (existing && existing.account_id === a.id && closed) {
+      // Ancien client (ex. rappel d'entretien) : nouvelle fiche, l'historique du chantier précédent reste intact.
+      E.createLead(db, a, { ...b, phone, email: existing.email, address: existing.address, postal_code: existing.postal_code, last_name: b.last_name || existing.last_name, preferred_slot: slot, consent: 1 }, { source: 'rdv' });
+    } else if (existing && existing.account_id === a.id) {
       E.updateLead(db, existing.id, { first_name: b.first_name, last_name: b.last_name || '', city: b.city || '', work_type: b.work_type, message: b.message || '', preferred_slot: slot, consent: 1, source: 'rdv' });
       E.logEvent(db, a.id, existing.id, 'rdv', `Demande de RDV : ${slot}`);
       const who = `${b.first_name} ${b.last_name || ''}`.trim();

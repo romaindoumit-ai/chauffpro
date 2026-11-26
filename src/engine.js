@@ -60,7 +60,7 @@ function schedule(db, account, lead, kind, channel, at, { tplKey, respectWindow 
     to = lead.phone;
     if (!to || !U.isMobile(to) || isOptedOut(db, lead, 'sms')) return null;
     body = fill(t[`${tplKey || kind}_sms`], vars);
-    if (/^(relance|avis)/.test(kind) && s.sms_footer) body += ` ${s.sms_footer}`;
+    if (/^(relance|avis|entretien)/.test(kind) && s.sms_footer) body += ` ${s.sms_footer}`;
   } else {
     to = lead.email;
     if (!to || isOptedOut(db, lead, 'email')) return null;
@@ -74,6 +74,7 @@ function schedule(db, account, lead, kind, channel, at, { tplKey, respectWindow 
       { label: 'Je ne donne pas suite', href: `${vars.lien}?choix=non` },
     ];
     if (kind.startsWith('avis')) buttons = [{ label: '⭐ Laisser un avis Google', href: vars.lien_avis, primary: true }];
+    if (kind === 'entretien') buttons = [{ label: '📅 Choisir un créneau', href: vars.lien_rdv, primary: true }];
     html = emailHtml(account, body, { buttons, lead });
   }
   let when = new Date(at);
@@ -158,6 +159,22 @@ function scheduleReview(db, account, lead, from = now()) {
   return n;
 }
 
+/** Rappel d'entretien N mois après le chantier (puis chaque année tant que le client ne se désinscrit pas). */
+function scheduleMaintenance(db, account, lead, from = now()) {
+  const s = settingsOf(account).entretien;
+  cancelPending(db, lead.id, 'entretien', 'replanifié');
+  if (!s.enabled || !(Number(s.months) > 0)) return 0;
+  // Un seul rappel en attente par client : on annule ceux d'anciennes fiches du même client.
+  const others = db.prepare(`SELECT id FROM leads WHERE account_id=? AND id<>? AND ((phone<>'' AND phone=?) OR (email<>'' AND email=?))`).all(account.id, lead.id, lead.phone || '-', lead.email || '-');
+  for (const o of others) cancelPending(db, o.id, 'entretien', 'remplacé par un chantier plus récent');
+  const at = addMonths(from, Number(s.months));
+  let n = 0;
+  if (s.sms && schedule(db, account, lead, 'entretien', 'sms', at)) n++;
+  if (s.email && schedule(db, account, lead, 'entretien', 'email', at)) n++;
+  return n;
+}
+function addMonths(d, n) { const x = new Date(d); x.setUTCMonth(x.getUTCMonth() + n); return x; }
+
 /** Changement de statut d'une demande : déclenche ou arrête les automatisations. */
 function setStatus(db, account, leadId, status, extra = {}) {
   const lead = getLead(db, leadId);
@@ -172,7 +189,11 @@ function setStatus(db, account, leadId, status, extra = {}) {
   let info = '';
   if (status === 'devis_envoye') info = `${scheduleRelances(db, account, fresh)} relance(s) programmée(s)`;
   else cancelPending(db, leadId, 'relance', 'statut changé');
-  if (status === 'termine') info = `${scheduleReview(db, account, fresh)} demande(s) d'avis programmée(s)`;
+  if (status === 'termine') {
+    info = `${scheduleReview(db, account, fresh)} demande(s) d'avis programmée(s)`;
+    const n = scheduleMaintenance(db, account, fresh);
+    if (n) info += ` · rappel d'entretien dans ${settingsOf(account).entretien.months} mois`;
+  }
   logEvent(db, account.id, leadId, 'statut', `Statut : ${(STATUSES[status] || { label: status }).label}${info ? ' · ' + info : ''}`);
   return getLead(db, leadId);
 }
@@ -299,6 +320,7 @@ async function processDue(db, at = now()) {
     db.prepare('DELETE FROM accounts WHERE is_demo=1 AND created_at<=?').run(U.iso(U.addHours(at, -24)));
     const due = db.prepare(`SELECT * FROM messages WHERE status='en_attente' AND scheduled_at<=? ORDER BY scheduled_at LIMIT 100`).all(U.iso(at));
     for (const m of due) {
+      if (db.prepare('SELECT status FROM messages WHERE id=?').get(m.id)?.status !== 'en_attente') continue; // annulé entre-temps
       const account = db.prepare('SELECT * FROM accounts WHERE id=?').get(m.account_id);
       const lead = m.lead_id ? getLead(db, m.lead_id) : null;
       const cancel = (why) => db.prepare(`UPDATE messages SET status='annule', error=? WHERE id=?`).run(why, m.id);
@@ -312,11 +334,13 @@ async function processDue(db, at = now()) {
       }
       try {
         const res = account.is_demo ? { simulated: true } // un compte démo n'envoie jamais rien pour de vrai
-          : m.channel === 'sms' ? await providers.sendSms(account, m.to_addr, m.body, { marketing: /^(relance|avis)/.test(m.kind) })
+          : m.channel === 'sms' ? await providers.sendSms(account, m.to_addr, m.body, { marketing: /^(relance|avis|entretien)/.test(m.kind) })
           : await providers.sendEmail(account, { to: m.to_addr, subject: m.subject, html: m.html || `<pre>${U.esc(m.body)}</pre>`, text: m.body });
         db.prepare('UPDATE messages SET status=?, sent_at=?, provider_id=? WHERE id=?').run(res.simulated ? 'simule' : 'envoye', U.iso(at), res.id || null, m.id);
         if (lead && m.kind !== 'notif') logEvent(db, account.id, lead.id, 'message', `${KINDS[m.kind] || m.kind} (${m.channel === 'sms' ? 'SMS' : 'e-mail'})${res.simulated ? ' [simulation]' : ''}`);
         n++;
+        // Rappel d'entretien envoyé : on programme celui de l'année suivante (une fois par client).
+        if (lead && m.kind === 'entretien' && !db.prepare(`SELECT 1 FROM messages WHERE lead_id=? AND kind='entretien' AND status='en_attente'`).get(lead.id)) scheduleMaintenance(db, account, getLead(db, lead.id), at);
       } catch (e) {
         db.prepare(`UPDATE messages SET status='echec', error=? WHERE id=?`).run(String(e.message).slice(0, 500), m.id);
         if (lead) logEvent(db, account.id, lead.id, 'erreur', `Échec d'envoi ${m.channel} : ${e.message}`.slice(0, 300));
@@ -332,4 +356,4 @@ function startScheduler(db, everyMs = 60000) {
   return setInterval(tick, everyMs);
 }
 
-module.exports = { createLead, setStatus, clientChoice, missedCall, optOutPhone, optOutEmail, processDue, startScheduler, stats, monthRange, currentMonth, prevMonth, monthLabel, reportText, monthlyReports, logEvent, updateLead, getLead, settingsOf, schedule, varsFor, fill, emailHtml, BASE };
+module.exports = { createLead, setStatus, scheduleMaintenance, addMonths, clientChoice, missedCall, optOutPhone, optOutEmail, processDue, startScheduler, stats, monthRange, currentMonth, prevMonth, monthLabel, reportText, monthlyReports, logEvent, updateLead, getLead, settingsOf, schedule, varsFor, fill, emailHtml, BASE };

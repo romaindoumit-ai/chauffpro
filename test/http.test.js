@@ -93,3 +93,28 @@ test('démo en ligne : un compte fictif par visiteur, rien de réel envoyé, eff
   await s.login('admin@test.be', 'admin-secret');
   assert.doesNotMatch((await s.req('/admin')).text, /Dupont Chauffage/);
 });
+
+test("ancien client ajouté à la main -> rappel d'entretien ; il reprend RDV -> nouvelle fiche", async (t) => {
+  const s = await boot();
+  t.after(() => s.server.close());
+  await s.login('admin@test.be', 'admin-secret');
+  let r = await s.req('/admin/comptes', { method: 'POST', form: { company_name: 'Chauffage Dubois', email: 'dubois@test.be', country: 'BE' } });
+  const pw = new URL(r.location, s.base).searchParams.get('pw');
+  await s.login('dubois@test.be', pw);
+  r = await s.req('/app/demandes', { method: 'POST', form: { first_name: 'Jan', phone: '0478 11 22 33', work_type: 'Remplacement de chaudière', last_service: '2025-12-10', consent: '1' } });
+  assert.match(decodeURIComponent(r.location), /rappel d'entretien est programmé/);
+  const lead = s.db.prepare('SELECT * FROM leads').get();
+  assert.equal(lead.status, 'termine');
+  const m = s.db.prepare("SELECT * FROM messages WHERE kind='entretien'").get();
+  assert.ok(m.scheduled_at >= '2026-12-10');
+  assert.equal(s.db.prepare("SELECT COUNT(*) n FROM messages WHERE kind LIKE 'avis%'").get().n, 0);
+  // Le client clique sur le lien du SMS et choisit un créneau
+  s.resetCookie();
+  r = await s.req(`/rdv/chauffage-dubois?l=${lead.token}`);
+  assert.match(r.text, /<option selected>Entretien ou dépannage chaudière/);
+  await s.req('/rdv/chauffage-dubois', { method: 'POST', form: { l: lead.token, work_type: 'Entretien ou dépannage chaudière', first_name: 'Jan', phone: '0478112233', city: '1000', day: 'lundi', slot: 'Matin (8h-12h)', consent: '1' } });
+  const leads = s.db.prepare('SELECT * FROM leads ORDER BY id').all();
+  assert.equal(leads.length, 2);
+  assert.equal(leads[0].work_type, 'Remplacement de chaudière');
+  assert.equal(leads[1].source, 'rdv');
+});
