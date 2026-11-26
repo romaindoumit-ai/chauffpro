@@ -26,6 +26,7 @@ module.exports = (db) => {
     const next = db.prepare(`SELECT m.*, l.first_name, l.last_name, l.phone, l.email FROM messages m LEFT JOIN leads l ON l.id=m.lead_id WHERE m.account_id=? AND m.status='en_attente' AND m.kind<>'notif' ORDER BY m.scheduled_at LIMIT 8`).all(a.id);
     const kpi = (v, l) => `<div class="card kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`;
     const setup = [];
+    if (!require('../push').count(db, a.id)) setup.push('📲 <a href="/app/appli">Installez l\'appli sur votre téléphone</a> pour être prévenu à chaque nouvelle demande.');
     if (!a.google_review_url) setup.push('<a href="/app/reglages">Ajoutez votre lien d\'avis Google</a> pour activer les demandes d\'avis.');
     if (!a.phone) setup.push('<a href="/app/reglages">Ajoutez votre numéro</a> pour qu\'il apparaisse dans les messages.');
     res.send(appLayout(req, 'Tableau de bord', `<h1>Bonjour ${U.esc((a.owner_name || '').split(' ')[0])} 👋</h1>
@@ -206,6 +207,28 @@ ${signed.length ? `<h2>Chantiers signés</h2><table><tr><th>Client</th><th>Proje
     if (!out.ok) return res.redirect('/app/integration?err=' + encodeURIComponent(`Test impossible : ${out.reason}`));
     back(res, out.leadId ? `/app/demandes/${out.leadId}` : '/app/integration', out.skipped ? `SMS non renvoyé : ${out.skipped}.` : 'Appel manqué simulé : voici la fiche créée et le SMS envoyé.');
   });
+
+  // ---------- Appli installable & notifications ----------
+  const push = require('../push');
+  r.get('/appli', (req, res) => {
+    const n = push.count(db, req.account.id);
+    res.send(appLayout(req, 'Appli & notifications', `<h1>Appli & notifications</h1>
+<div class="grid g2"><div class="card" id="pwa"><h3>🔔 Être prévenu tout de suite</h3>
+<p>Recevez une notification sur ce téléphone à chaque nouvelle demande, appel manqué, devis accepté ou client à rappeler.</p>
+<p id="pwa-status" class="small muted">Vérification…</p>
+<p class="row"><button class="btn" id="pwa-on" style="flex:0 0 auto">Activer les notifications</button><button class="btn sec" id="pwa-test" style="display:none;flex:0 0 auto">Envoyer un test</button><button class="btn sm grey" id="pwa-off" style="display:none;flex:0 0 auto">Désactiver sur cet appareil</button></p>
+<p class="small muted">${n ? `${n} appareil(s) reçoivent déjà vos notifications.` : 'Aucun appareil ne reçoit encore vos notifications.'} À faire sur chaque téléphone ou ordinateur où vous voulez être prévenu.</p></div>
+<div class="card"><h3>📲 Installer ChauffPro sur l'écran d'accueil</h3>
+<p><button class="btn" id="pwa-install" style="display:none">Installer l'appli</button></p>
+<p><b>Android (Chrome) :</b> menu ⋮ en haut à droite, puis « Installer l'application » (ou « Ajouter à l'écran d'accueil »).</p>
+<p><b>iPhone (Safari) :</b> bouton Partager <span aria-hidden="true">⬆️</span> en bas, puis « Sur l'écran d'accueil ». Ouvrez ensuite ChauffPro depuis l'icône et activez les notifications ici.</p>
+<p id="pwa-ios" class="banner" style="display:none">Sur iPhone, les notifications ne marchent qu'une fois l'appli installée sur l'écran d'accueil (iOS 16.4 ou plus récent).</p>
+<p class="small muted">L'appli s'ouvre directement sur votre tableau de bord, en plein écran, comme une vraie application.</p></div></div>`, 'appli'));
+  });
+  r.get('/push/cle', (req, res) => res.type('text/plain').send(push.publicKey(db)));
+  r.post('/push/abonner', (req, res) => res.json({ ok: push.subscribe(db, req.account.id, req.body) }));
+  r.post('/push/desabonner', (req, res) => { push.unsubscribe(db, req.account.id, req.body && req.body.endpoint); res.json({ ok: true }); });
+  r.post('/push/test', async (req, res) => res.json({ ok: true, sent: await push.notify(db, req.account, { title: '🔔 ChauffPro', body: 'Les notifications fonctionnent ! Vous serez prévenu à chaque nouvelle demande.', url: '/app' }) }));
 
   // ---------- Réglages ----------
   r.get('/reglages', (req, res) => {

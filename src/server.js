@@ -22,7 +22,7 @@ function createApp(db) {
   app.get('/', (req, res) => res.redirect(req.account ? (req.account.is_admin ? '/admin' : '/app') : '/connexion'));
 
   const loginPage = (err = '') => publicLayout(`Connexion · ${APP_NAME()}`, `<div class="card" style="max-width:420px;margin:40px auto"><h1>${U.esc(APP_NAME())}</h1><p class="muted">Espace artisan</p>
-${err ? `<div class="flash err">${U.esc(err)}</div>` : ''}<form method="post" action="/connexion"><label>E-mail</label><input name="email" type="email" required autofocus><label>Mot de passe</label><input name="password" type="password" required><p><button class="btn" style="width:100%">Se connecter</button></p></form><p class="small muted" style="text-align:center">Pas encore client ? <a href="/demo">Voir la démo</a></p></div>`);
+${err ? `<div class="flash err">${U.esc(err)}</div>` : ''}<form method="post" action="/connexion"><label>E-mail</label><input name="email" type="email" required autofocus><label>Mot de passe</label><input name="password" type="password" required><p><button class="btn" style="width:100%">Se connecter</button></p></form><p class="small muted" style="text-align:center">Pas encore client ? <a href="/demo">Voir la démo</a></p></div>`, { app: true });
   app.get('/connexion', (req, res) => res.send(loginPage()));
   const attempts = new Map();
   app.post('/connexion', (req, res) => {

@@ -90,6 +90,13 @@ function migrate(db) {
     admin_id INTEGER,
     expires_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT);
+  CREATE TABLE IF NOT EXISTS push_subs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    endpoint TEXT UNIQUE NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
   CREATE TABLE IF NOT EXISTS opt_outs (
     phone TEXT, email TEXT, account_id INTEGER,
     created_at TEXT DEFAULT (datetime('now'))

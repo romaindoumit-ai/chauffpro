@@ -118,3 +118,34 @@ test("ancien client ajouté à la main -> rappel d'entretien ; il reprend RDV ->
   assert.equal(leads[0].work_type, 'Remplacement de chaudière');
   assert.equal(leads[1].source, 'rdv');
 });
+
+test('appli installable + notification envoyée au téléphone à chaque nouvelle demande', async (t) => {
+  const webpush = require('web-push');
+  const sent = [];
+  const orig = webpush.sendNotification;
+  webpush.sendNotification = async (sub, payload) => { sent.push({ sub, payload: JSON.parse(payload) }); return {}; };
+  t.after(() => { webpush.sendNotification = orig; });
+  const s = await boot();
+  t.after(() => s.server.close());
+  assert.equal((await s.req('/manifest.webmanifest')).status, 200);
+  assert.equal((await s.req('/sw.js')).status, 200);
+  await s.login('admin@test.be', 'admin-secret');
+  let r = await s.req('/admin/comptes', { method: 'POST', form: { company_name: 'Chauffage Dubois', email: 'dubois@test.be', country: 'BE' } });
+  await s.login('dubois@test.be', new URL(r.location, s.base).searchParams.get('pw'));
+  r = await s.req('/app/appli');
+  assert.match(r.text, /Activer les notifications/);
+  assert.match(r.text, /manifest\.webmanifest/);
+  const key = (await s.req('/app/push/cle')).text;
+  assert.ok(key.length > 60);
+  assert.equal((await s.req('/app/push/cle')).text, key); // clé stable
+  r = await s.req('/app/push/abonner', { method: 'POST', json: { endpoint: 'http://pas-https', keys: { p256dh: 'a', auth: 'b' } }, headers: { origin: s.base } });
+  assert.equal(JSON.parse(r.text).ok, false);
+  r = await s.req('/app/push/abonner', { method: 'POST', json: { endpoint: 'https://push.exemple/abc', keys: { p256dh: 'cle', auth: 'auth' } }, headers: { origin: s.base } });
+  assert.equal(JSON.parse(r.text).ok, true);
+  s.resetCookie();
+  await s.req('/f/chauffage-dubois', { method: 'POST', form: { work_type: 'Remplacement de chaudière', first_name: 'Lotte', phone: '0478 12 34 56', postal_code: '1050', consent: '1' } });
+  await new Promise((res) => setTimeout(res, 50));
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].payload.title, /Nouvelle demande : Lotte/);
+  assert.match(sent[0].payload.url, /^\/app\/demandes\/\d+$/);
+});

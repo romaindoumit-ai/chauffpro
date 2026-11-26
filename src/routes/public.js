@@ -133,11 +133,7 @@ ${a.google_review_url ? `<p><a href="${U.esc(a.google_review_url)}" target="_bla
       E.updateLead(db, existing.id, { first_name: b.first_name, last_name: b.last_name || '', city: b.city || '', work_type: b.work_type, message: b.message || '', preferred_slot: slot, consent: 1, source: 'rdv' });
       E.logEvent(db, a.id, existing.id, 'rdv', `Demande de RDV : ${slot}`);
       const who = `${b.first_name} ${b.last_name || ''}`.trim();
-      const st = E.settingsOf(a);
-      const ins = (ch, to, subj, body) => db.prepare(`INSERT INTO messages (account_id, lead_id, kind, channel, to_addr, subject, body, html, respect_window, scheduled_at, created_at) VALUES (?,?,?,?,?,?,?,?,0,?,?)`).run(a.id, existing.id, 'notif', ch, to, subj, body, ch === 'email' ? E.emailHtml(a, body, { buttons: [{ label: 'Ouvrir la fiche', href: `${E.BASE()}/app/demandes/${existing.id}`, primary: true }] }) : null, U.iso(new Date()), U.iso(new Date()));
-      const txt = `${who} (${U.displayPhone(phone)}, ${b.city}) demande un RDV : ${slot}. Besoin : ${b.work_type}. ${b.message || ''}`;
-      if (st.notif.email) ins('email', a.email, `📅 Demande de RDV : ${who}`, txt);
-      if (st.notif.sms && U.isMobile(a.phone || '')) ins('sms', a.phone, null, `RDV demandé : ${txt}`.slice(0, 300));
+      E.notifyArtisan(db, a, existing.id, `📅 Demande de RDV : ${who}`, `${who} (${U.displayPhone(phone)}, ${b.city}) demande un RDV : ${slot}.\nBesoin : ${b.work_type}\n${b.message || ''}`.trim());
     } else {
       E.createLead(db, a, { ...b, phone, preferred_slot: slot, consent: 1 }, { source: 'rdv' });
     }

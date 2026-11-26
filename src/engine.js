@@ -95,6 +95,8 @@ function notifyArtisan(db, account, leadId, subject, text) {
   const link = leadId ? `${BASE()}/app/demandes/${leadId}` : `${BASE()}/app`;
   if (s.notif.email && account.email) ins.run(account.id, leadId, 'notif', 'email', account.email, subject, `${text}\n\nVoir la fiche : ${link}`, emailHtml(account, text, { buttons: [{ label: 'Ouvrir la fiche', href: link, primary: true }] }), U.iso(now()), U.iso(now()));
   if (s.notif.sms && U.isMobile(account.phone || '')) ins.run(account.id, leadId, 'notif', 'sms', account.phone, null, `${subject}. ${link}`.slice(0, 300), null, U.iso(now()), U.iso(now()));
+  // Notification sur le téléphone (appli installée), immédiate.
+  require('./push').notify(db, account, { title: subject, body: text.split('\n').slice(0, 3).join(' · '), url: leadId ? `/app/demandes/${leadId}` : '/app' }).catch(() => {});
 }
 
 function getLead(db, id) { return db.prepare('SELECT * FROM leads WHERE id=?').get(id); }
@@ -356,4 +358,4 @@ function startScheduler(db, everyMs = 60000) {
   return setInterval(tick, everyMs);
 }
 
-module.exports = { createLead, setStatus, scheduleMaintenance, addMonths, clientChoice, missedCall, optOutPhone, optOutEmail, processDue, startScheduler, stats, monthRange, currentMonth, prevMonth, monthLabel, reportText, monthlyReports, logEvent, updateLead, getLead, settingsOf, schedule, varsFor, fill, emailHtml, BASE };
+module.exports = { notifyArtisan, createLead, setStatus, scheduleMaintenance, addMonths, clientChoice, missedCall, optOutPhone, optOutEmail, processDue, startScheduler, stats, monthRange, currentMonth, prevMonth, monthLabel, reportText, monthlyReports, logEvent, updateLead, getLead, settingsOf, schedule, varsFor, fill, emailHtml, BASE };
