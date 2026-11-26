@@ -305,6 +305,21 @@ ${signed.length ? `<h2>Chantiers signés</h2><table><tr><th>Client</th><th>Proje
   r.post('/push/desabonner', (req, res) => { push.unsubscribe(db, req.account.id, req.body && req.body.endpoint); res.json({ ok: true }); });
   r.post('/push/test', async (req, res) => res.json({ ok: true, sent: await push.notify(db, req.account, { title: '🔔 ChauffPro', body: 'Les notifications fonctionnent ! Vous serez prévenu à chaque nouvelle demande.', url: '/app' }) }));
 
+  // ---------- Abonnement (Stripe) ----------
+  r.get('/abonnement', (req, res) => {
+    const a = req.account, B = require('../billing'), p = B.PLANS[a.plan] || B.PLANS.complet;
+    const st = { actif: '✅ Actif', impaye: '⚠ Dernier paiement refusé : mettez à jour votre carte', resilie: 'Résilié' }[a.billing_status] || a.billing_status;
+    res.send(appLayout(req, 'Abonnement', `<h1>Abonnement</h1><div class="card" style="max-width:560px"><p>Formule <b>${p.name}</b> · ${a.monthly_price} €/mois HTVA</p><p>${U.esc(st)}</p>
+${a.stripe_customer_id && B.enabled() ? '<form method="post" action="/app/abonnement/portail"><button class="btn">Gérer ma carte, mes factures ou résilier</button></form>' : '<p class="muted small">Contactez-nous pour toute question sur votre abonnement.</p>'}</div>`, 'abonnement'));
+  });
+  r.post('/abonnement/portail', async (req, res, next) => {
+    try {
+      const B = require('../billing');
+      if (!req.account.stripe_customer_id || !B.enabled()) return res.redirect('/app/abonnement');
+      res.redirect(303, await B.portalUrl(req.account));
+    } catch (e) { next(e); }
+  });
+
   // ---------- Réglages ----------
   r.get('/reglages', (req, res) => {
     const a = req.account, s = E.settingsOf(a);

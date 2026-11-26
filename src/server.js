@@ -12,6 +12,14 @@ function createApp(db) {
   const app = express();
   app.set('trust proxy', 1);
   app.disable('x-powered-by');
+  // Stripe signe ses messages : il faut le corps brut, avant le décodage JSON.
+  app.post('/webhooks/stripe', express.raw({ type: '*/*', limit: '1mb' }), (req, res) => {
+    const B = require('./billing');
+    if (!B.enabled() || !process.env.STRIPE_WEBHOOK_SECRET) return res.status(404).json({ ok: false });
+    let event;
+    try { event = B.client().webhooks.constructEvent(req.body, req.headers['stripe-signature'], process.env.STRIPE_WEBHOOK_SECRET); } catch (e) { return res.status(400).json({ ok: false, error: 'signature' }); }
+    try { res.json({ ok: true, handled: B.handleEvent(db, event) }); } catch (e) { console.error('[stripe]', e); res.status(500).json({ ok: false }); }
+  });
   app.use(express.urlencoded({ extended: false, limit: '200kb' }));
   app.use(express.json({ limit: '200kb' }));
   app.use(express.static(path.join(__dirname, '..', 'public'), { maxAge: '1h' }));
@@ -22,7 +30,7 @@ function createApp(db) {
   app.get('/', (req, res) => res.redirect(req.account ? (req.account.is_admin ? '/admin' : '/app') : '/connexion'));
 
   const loginPage = (err = '') => publicLayout(`Connexion · ${APP_NAME()}`, `<div class="card" style="max-width:420px;margin:40px auto"><h1>${U.esc(APP_NAME())}</h1><p class="muted">Espace artisan</p>
-${err ? `<div class="flash err">${U.esc(err)}</div>` : ''}<form method="post" action="/connexion"><label>E-mail</label><input name="email" type="email" required autofocus><label>Mot de passe</label><input name="password" type="password" required><p><button class="btn" style="width:100%">Se connecter</button></p></form><p class="small muted" style="text-align:center">Pas encore client ? <a href="/demo">Voir la démo</a></p></div>`, { app: true });
+${err ? `<div class="flash err">${U.esc(err)}</div>` : ''}<form method="post" action="/connexion"><label>E-mail</label><input name="email" type="email" required autofocus><label>Mot de passe</label><input name="password" type="password" required><p><button class="btn" style="width:100%">Se connecter</button></p></form><p class="small muted" style="text-align:center">Pas encore client ? <a href="/demo">Voir la démo</a> · <a href="/inscription">S'inscrire</a></p></div>`, { app: true });
   app.get('/connexion', (req, res) => res.send(loginPage()));
   const attempts = new Map();
   app.post('/connexion', (req, res) => {
@@ -31,6 +39,8 @@ ${err ? `<div class="flash err">${U.esc(err)}</div>` : ''}<form method="post" ac
     if (arr.length >= 10) return res.status(429).send(loginPage('Trop de tentatives, réessayez dans 15 minutes.'));
     const a = db.prepare('SELECT * FROM accounts WHERE email=?').get(String(req.body.email || '').trim().toLowerCase());
     if (!a || !U.checkPassword(req.body.password, a.password_hash)) { arr.push(t); attempts.set(key, arr); return res.status(401).send(loginPage('E-mail ou mot de passe incorrect.')); }
+    if (!a.active && a.billing_status === 'en_attente_paiement' && require('./billing').enabled()) return require('./billing').checkoutUrl(a).then((u) => res.redirect(303, u)).catch(() => res.status(503).send(loginPage('Paiement indisponible pour le moment, réessayez dans un instant.')));
+    if (!a.active && a.billing_status === 'a_valider') return res.status(403).send(loginPage('Votre inscription est bien reçue : nous vous appelons très vite pour activer votre compte.'));
     if (!a.active) return res.status(403).send(loginPage('Compte suspendu. Contactez votre prestataire.'));
     A.createSession(db, res, a.id);
     res.redirect(a.is_admin ? '/admin' : '/app');
@@ -55,6 +65,7 @@ ${err ? `<div class="flash err">${U.esc(err)}</div>` : ''}<form method="post" ac
 
   app.use('/app', A.requireLogin, A.sameOrigin, require('./routes/app')(db));
   app.use('/admin', A.requireLogin, A.sameOrigin, A.requireAdmin(db), require('./routes/admin')(db));
+  app.use('/', require('./routes/signup')(db));
   app.use('/', require('./routes/public')(db));
   app.use((req, res) => res.status(404).send(publicLayout('Page introuvable', '<div class="card"><h1>Page introuvable</h1><p><a href="/">Retour</a></p></div>')));
   app.use((err, req, res, next) => { console.error(err); res.status(500).send(publicLayout('Erreur', '<div class="card"><h1>Oups, une erreur est survenue</h1><p>Réessayez dans un instant.</p></div>')); });

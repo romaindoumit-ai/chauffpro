@@ -4,6 +4,7 @@ const U = require('../util');
 const E = require('../engine');
 const { appLayout } = require('../views');
 const { createSession } = require('../auth');
+const B = require('../billing');
 
 module.exports = (db) => {
   const r = express.Router();
@@ -17,10 +18,10 @@ module.exports = (db) => {
     const rows = accounts.map((a) => {
       const st = E.stats(db, a.id, f, t);
       return `<tr><td><b>${U.esc(a.company_name)}</b><div class="small muted">${U.esc(a.owner_name || '')} · ${U.esc(a.email)} · ${U.esc(U.displayPhone(a.phone))}</div></td>
-<td>${a.active ? '<span class="badge" style="background:#2f9e44">Actif</span>' : '<span class="badge" style="background:#868e96">Suspendu</span>'}<div class="small">${a.monthly_price} €/mois</div></td>
+<td>${a.active ? '<span class="badge" style="background:#2f9e44">Actif</span>' : a.billing_status === 'a_valider' ? '<span class="badge" style="background:#e8590c">À valider</span>' : a.billing_status === 'en_attente_paiement' ? '<span class="badge" style="background:#f08c00">Paiement en attente</span>' : '<span class="badge" style="background:#868e96">Suspendu</span>'}${a.billing_status === 'impaye' ? ' <span class="badge" style="background:#e03131">Impayé</span>' : ''}<div class="small">${U.esc((B.PLANS[a.plan] || { name: a.plan }).name)} · ${a.monthly_price} €/mois${a.setup_fee ? ` + ${a.setup_fee} €` : ''}</div>${a.stripe_customer_id ? `<div class="small"><a href="https://dashboard.stripe.com/${B.testMode() ? 'test/' : ''}customers/${U.esc(a.stripe_customer_id)}" target="_blank" rel="noopener">Voir dans Stripe</a></div>` : ''}</td>
 <td class="small">${st.demandes} demandes · ${st.devis} devis<br>${st.relances} relances · ${st.signes} signés (${U.euros(st.ca)})<br>${st.avisDemandes} avis demandés</td>
 <td class="actions"><form method="post" action="/admin/comptes/${a.id}/connexion"><button class="btn sm">Ouvrir</button></form>
-<form method="post" action="/admin/comptes/${a.id}/actif"><button class="btn sm sec">${a.active ? 'Suspendre' : 'Réactiver'}</button></form>
+<form method="post" action="/admin/comptes/${a.id}/actif"><button class="btn sm ${a.billing_status === 'a_valider' ? '' : 'sec'}">${a.active ? 'Suspendre' : a.billing_status === 'a_valider' ? 'Valider' : 'Réactiver'}</button></form>
 <form method="post" action="/admin/comptes/${a.id}/mot-de-passe"><button class="btn sm sec">Nouveau mot de passe</button></form></td></tr>`;
     }).join('');
     const pw = req.query.pw ? `<div class="flash">Identifiants à transmettre à l'artisan : <b>${U.esc(req.query.email)}</b> / mot de passe <b>${U.esc(req.query.pw)}</b> · connexion sur ${E.BASE()}/connexion</div>` : '';
@@ -32,7 +33,7 @@ ${fails ? `<div class="banner" style="margin-top:12px">⚠ ${fails} envoi(s) en 
 <h2>Ajouter un artisan</h2><div class="card" style="max-width:720px"><form method="post" action="/admin/comptes">
 <div class="row"><div><label>Entreprise *</label><input name="company_name" required></div><div><label>Nom du gérant</label><input name="owner_name"></div></div>
 <div class="row"><div><label>E-mail *</label><input name="email" type="email" required></div><div><label>Mobile</label><input name="phone"></div></div>
-<div class="row"><div><label>Ville</label><input name="city"></div><div><label>Pays</label><select name="country">${Object.entries(U.COUNTRIES).map(([k, c]) => `<option value="${k}" ${U.DEFAULT_COUNTRY() === k ? 'selected' : ''}>${c.name}</option>`).join('')}</select></div><div><label>Abonnement (€/mois)</label><input name="monthly_price" type="number" value="99"></div></div>
+<div class="row"><div><label>Ville</label><input name="city"></div><div><label>Pays</label><select name="country">${Object.entries(U.COUNTRIES).map(([k, c]) => `<option value="${k}" ${U.DEFAULT_COUNTRY() === k ? 'selected' : ''}>${c.name}</option>`).join('')}</select></div><div><label>Formule</label><select name="plan">${Object.entries(B.PLANS).map(([k, p]) => `<option value="${k}" ${k === 'complet' ? 'selected' : ''}>${p.name} (${p.monthly} €/mois)</option>`).join('')}</select></div><div><label>Prix spécial (€/mois, facultatif)</label><input name="monthly_price" type="number" placeholder="prix de la formule"></div></div>
 <label>Lien avis Google</label><input name="google_review_url">
 <p><button class="btn">Créer le compte</button></p></form></div>`, 'admin'));
   });
@@ -44,8 +45,8 @@ ${fails ? `<div class="banner" style="margin-top:12px">⚠ ${fails} envoi(s) en 
     while (db.prepare('SELECT 1 FROM accounts WHERE slug=?').get(slug)) slug = `${U.slugify(b.company_name)}-${++i}`;
     const pw = U.token(6);
     const country = U.COUNTRIES[b.country] ? b.country : U.DEFAULT_COUNTRY();
-    db.prepare(`INSERT INTO accounts (slug, company_name, owner_name, email, password_hash, phone, city, google_review_url, monthly_price, webhook_token, created_at, country) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .run(slug, b.company_name, b.owner_name || '', email, U.hashPassword(pw), U.normalizePhone(b.phone, country), b.city || '', b.google_review_url || '', +b.monthly_price || 0, U.token(), U.iso(new Date()), country);
+    db.prepare(`INSERT INTO accounts (slug, company_name, owner_name, email, password_hash, phone, city, google_review_url, monthly_price, webhook_token, created_at, country, plan, setup_fee) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(slug, b.company_name, b.owner_name || '', email, U.hashPassword(pw), U.normalizePhone(b.phone, country), b.city || '', b.google_review_url || '', +b.monthly_price || (B.PLANS[b.plan] || B.PLANS.complet).monthly, U.token(), U.iso(new Date()), country, B.PLANS[b.plan] ? b.plan : 'complet', (B.PLANS[b.plan] || B.PLANS.complet).setup);
     res.redirect(`/admin?email=${encodeURIComponent(email)}&pw=${encodeURIComponent(pw)}`);
   });
   const adminId = (req) => (req.account.is_admin ? req.account.id : req.adminId);
@@ -61,7 +62,9 @@ ${fails ? `<div class="banner" style="margin-top:12px">⚠ ${fails} envoi(s) en 
     createSession(db, res, id, null);
     res.redirect('/admin');
   });
-  r.post('/comptes/:id/actif', (req, res) => { db.prepare('UPDATE accounts SET active=1-active WHERE id=? AND is_admin=0').run(req.params.id); res.redirect('/admin?ok=' + encodeURIComponent('Compte mis à jour.')); });
+  r.post('/comptes/:id/actif', (req, res) => {
+    db.prepare('UPDATE accounts SET active=1-active WHERE id=? AND is_admin=0').run(req.params.id);
+    db.prepare(`UPDATE accounts SET billing_status='manuel' WHERE id=? AND active=1 AND billing_status='a_valider'`).run(req.params.id); res.redirect('/admin?ok=' + encodeURIComponent('Compte mis à jour.')); });
   r.post('/comptes/:id/mot-de-passe', (req, res) => {
     const a = db.prepare('SELECT * FROM accounts WHERE id=? AND is_admin=0').get(req.params.id); if (!a) return res.redirect('/admin');
     const pw = U.token(6);

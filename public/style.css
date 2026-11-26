@@ -37,3 +37,5 @@ fieldset.visit{border:1px solid var(--line);border-radius:12px;padding:12px 14px
 .vslot.none{margin-top:8px}.visit details summary{cursor:pointer;margin:6px 0;color:var(--c)}
 .card.ai{border-color:#d0bfff;background:linear-gradient(180deg,#f8f5ff,#fff 60px)}.ai-out{white-space:pre-wrap;background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:14px}
 .lang{float:right;font-size:13px;color:var(--mut)}.lang a{color:inherit}.lang b{color:var(--txt)}.lang.light{float:none;display:inline;margin-right:12px}
+.plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:10px 0}.plan{display:block;border:2px solid var(--line);border-radius:12px;padding:14px 16px;cursor:pointer;margin:0;font-weight:400}
+.plan input{position:absolute;opacity:0}.plan:has(input:checked){border-color:var(--c);background:#fff8f3}.plan-n{font-weight:800;font-size:17px}.plan-p{font-size:15px;margin:2px 0}.plan-p b{font-size:24px}.plan ul{margin:8px 0 0;padding-left:18px;font-size:14px}

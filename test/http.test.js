@@ -267,3 +267,74 @@ test('formulaire en néerlandais : page, données en français pour l\'artisan, 
   assert.match((await s.req('/s/chauffage-dubois/confidentialite?lang=nl')).text, /Gegevensbeschermingsautoriteit/);
   assert.match((await s.req('/s/chauffage-dubois?lang=nl')).text, /Onze diensten/);
 });
+
+test('inscription sans Stripe : compte « à valider », l\'admin valide', async (t) => {
+  const s = await boot();
+  t.after(() => s.server.close());
+  let r = await s.req('/inscription');
+  assert.match(r.text, /Essentiel/);
+  assert.match(r.text, /79 €/);
+  assert.match(r.text, /490 €/);
+  const form = { plan: 'essentiel', company_name: 'Thermo Plus', owner_name: 'Ali Ben', email: 'ali@thermo.be', phone: '0478 11 22 33', password: 'motdepasse1', cgv: '1', country: 'BE' };
+  r = await s.req('/inscription', { method: 'POST', form });
+  assert.match(r.text, /Merci, c'est noté/);
+  const a = s.db.prepare("SELECT * FROM accounts WHERE email='ali@thermo.be'").get();
+  assert.equal(a.active, 0); assert.equal(a.billing_status, 'a_valider'); assert.equal(a.plan, 'essentiel'); assert.equal(a.monthly_price, 79); assert.equal(a.setup_fee, 290);
+  assert.ok(s.db.prepare("SELECT 1 FROM messages WHERE subject LIKE 'Nouvelle inscription%'").get());
+  r = await s.login('ali@thermo.be', 'motdepasse1');
+  assert.match(r.text, /nous vous appelons très vite/);
+  assert.equal((await s.req('/inscription', { method: 'POST', form })).status, 400); // e-mail déjà pris
+  await s.login('admin@test.be', 'admin-secret');
+  assert.match((await s.req('/admin')).text, /À valider/);
+  await s.req(`/admin/comptes/${a.id}/actif`, { method: 'POST', form: {} });
+  r = await s.login('ali@thermo.be', 'motdepasse1');
+  assert.equal(r.location, '/app');
+});
+
+test('inscription avec Stripe (mode test) : paiement, activation, impayé, résiliation', async (t) => {
+  const Stripe = require('stripe');
+  const B = require('../src/billing');
+  const real = new Stripe('sk_test_fake');
+  const created = [];
+  B._stripe = {
+    checkout: { sessions: {
+      create: async (p) => { created.push(p); return { url: 'https://checkout.stripe.test/c/pay/cs_test_123' }; },
+      retrieve: async (id) => ({ id, status: 'complete', payment_status: 'paid', client_reference_id: String(created[0].client_reference_id), customer: 'cus_123', subscription: 'sub_123' }),
+    } },
+    webhooks: real.webhooks,
+    billingPortal: { sessions: { create: async () => ({ url: 'https://billing.stripe.test/p/session' }) } },
+  };
+  process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
+  const s = await boot();
+  t.after(() => { s.server.close(); B._stripe = null; delete process.env.STRIPE_WEBHOOK_SECRET; });
+  let r = await s.req('/inscription', { method: 'POST', form: { plan: 'complet', company_name: 'Thermo Plus', owner_name: 'Ali Ben', email: 'ali@thermo.be', phone: '0478 11 22 33', password: 'motdepasse1', cgv: '1' } });
+  assert.equal(r.status, 303);
+  assert.match(r.location, /checkout\.stripe\.test/);
+  const p = created[0];
+  assert.equal(p.mode, 'subscription');
+  assert.deepEqual(p.line_items.map((l) => [l.price_data.unit_amount, !!l.price_data.recurring]), [[12900, true], [49000, false]]);
+  let a = s.db.prepare("SELECT * FROM accounts WHERE email='ali@thermo.be'").get();
+  assert.equal(a.active, 0);
+  // Connexion avant d'avoir payé -> renvoyé vers le paiement
+  r = await s.login('ali@thermo.be', 'motdepasse1');
+  assert.match(r.location, /checkout\.stripe\.test/);
+  // Retour de Stripe
+  r = await s.req('/inscription/merci?session_id=cs_test_123');
+  assert.match(r.location, /^\/app\?ok=/);
+  a = s.db.prepare('SELECT * FROM accounts WHERE id=?').get(a.id);
+  assert.equal(a.active, 1); assert.equal(a.billing_status, 'actif'); assert.equal(a.stripe_customer_id, 'cus_123');
+  assert.match((await s.req('/app/abonnement')).text, /Complet/);
+  assert.match((await s.req('/app/abonnement/portail', { method: 'POST', form: {}, headers: { origin: s.base } })).location, /billing\.stripe\.test/);
+  // Webhooks signés
+  const post = async (event, sig) => {
+    const payload = JSON.stringify(event);
+    const res = await fetch(s.base + '/webhooks/stripe', { method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': sig || real.webhooks.generateTestHeaderString({ payload, secret: 'whsec_test' }) }, body: payload });
+    return res.status;
+  };
+  assert.equal(await post({ type: 'invoice.payment_failed', data: { object: { subscription: 'sub_123', customer: 'cus_123' } } }, 't=1,v1=faux'), 400); // fausse signature
+  assert.equal(await post({ type: 'invoice.payment_failed', data: { object: { subscription: 'sub_123', customer: 'cus_123' } } }), 200);
+  assert.equal(s.db.prepare('SELECT billing_status FROM accounts WHERE id=?').get(a.id).billing_status, 'impaye');
+  await post({ type: 'customer.subscription.deleted', data: { object: { id: 'sub_123', customer: 'cus_123', status: 'canceled' } } });
+  a = s.db.prepare('SELECT * FROM accounts WHERE id=?').get(a.id);
+  assert.equal(a.active, 0); assert.equal(a.billing_status, 'resilie');
+});

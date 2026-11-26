@@ -63,6 +63,16 @@ L'IA ne fait que proposer des textes : rien n'est envoyé au client sans que l'a
 
 > Tant que `BREVO_API_KEY` est vide, l'application tourne en **mode simulation**. Tout fonctionne et tout s'affiche, mais rien n'est réellement envoyé. C'est parfait pour faire une démo.
 
+## Inscription en ligne et paiement (Stripe)
+
+Un chauffagiste peut s'inscrire seul sur **`/inscription`** : il choisit **Essentiel** (79 €/mois + 290 € de mise en place) ou **Complet** (129 €/mois + 490 €), crée son compte, puis paie.
+
+- **Sans Stripe** (variable `STRIPE_SECRET_KEY` vide) : rien n'est encaissé. Le compte arrive « À valider » dans votre administration et vous recevez un e-mail. Vous l'appelez, puis vous cliquez sur « Valider ».
+- **Stripe en mode test** (en attendant votre numéro d'entreprise) : créez un compte sur [stripe.com](https://stripe.com), restez en « mode test », copiez la clé `sk_test_…` dans `STRIPE_SECRET_KEY` sur Render. Le parcours de paiement est complet, avec la fausse carte `4242 4242 4242 4242`.
+- **Webhook** (pour savoir quand un prélèvement échoue ou qu'un client résilie) : dans Stripe › Développeurs › Webhooks, ajoutez l'adresse `https://app.chauffpro.be/webhooks/stripe` avec les événements `checkout.session.completed`, `invoice.paid`, `invoice.payment_failed`, `customer.subscription.updated` et `customer.subscription.deleted`. Copiez la « clé secrète de signature » (`whsec_…`) dans `STRIPE_WEBHOOK_SECRET`.
+- **Passage en réel** : une fois l'entreprise enregistrée, activez le compte Stripe et remplacez les deux clés de test par les clés réelles. Activez aussi l'espace client Stripe (Paramètres › Billing › Portail client) : l'artisan y gère sa carte, ses factures et sa résiliation depuis « Abonnement ».
+- Les prix sont indiqués hors TVA. Pensez à configurer la TVA dans Stripe (Stripe Tax ou taux fixe) avant de passer en réel, et mettez le lien de vos CGV dans `CGV_URL`.
+
 ## 3. Mettre en place un nouvel artisan (15 à 20 minutes)
 
 1. Dans **Administration › Ajouter un artisan**, renseignez l'entreprise, l'e-mail, le mobile et le prix de l'abonnement. Notez les identifiants affichés.
