@@ -61,12 +61,12 @@ ${rows.length ? `<table><tr><th>Client</th><th>Projet</th><th>Statut</th><th>Mon
   r.get('/demandes/nouvelle', (req, res) => {
     res.send(appLayout(req, 'Nouvelle demande', `<h1>Ajouter un client / un devis</h1><div class="card" style="max-width:720px"><form method="post" action="/app/demandes">
 <div class="row"><div><label>Prénom</label><input name="first_name"></div><div><label>Nom</label><input name="last_name"></div></div>
-<div class="row"><div><label>Mobile</label><input name="phone" placeholder="06…"></div><div><label>E-mail</label><input name="email" type="email"></div></div>
+<div class="row"><div><label>Mobile</label><input name="phone" placeholder="${U.C(req.account).mobileExample}"></div><div><label>E-mail</label><input name="email" type="email"></div></div>
 <div class="row"><div><label>Adresse</label><input name="address"></div><div><label>Code postal</label><input name="postal_code"></div><div><label>Ville</label><input name="city"></div></div>
 <label>Projet</label><select name="work_type">${WORK_TYPES.map((w) => `<option>${w}</option>`).join('')}</select>
 <label>Notes</label><textarea name="message"></textarea>
 <h2>Le devis est déjà envoyé ?</h2><p class="small muted">Si vous remplissez le montant, la demande passe en « Devis envoyé » et les relances automatiques démarrent.</p>
-<div class="row"><div><label>Montant TTC (€)</label><input name="quote_amount" inputmode="decimal"></div><div><label>N° de devis</label><input name="quote_ref"></div></div>
+<div class="row"><div><label>Montant ${U.C(req.account).tax} (€)</label><input name="quote_amount" inputmode="decimal"></div><div><label>N° de devis</label><input name="quote_ref"></div></div>
 <label class="chk"><input type="checkbox" name="consent" value="1" checked> Le client a accepté d'être recontacté (SMS / e-mail) au sujet de ce devis.</label>
 <p><button class="btn">Enregistrer</button></p></form></div>`, 'demandes'));
   });
@@ -93,7 +93,7 @@ ${l.opt_out_sms || l.opt_out_email ? `<div class="banner">Ce client s'est désin
 <div class="grid g2"><div>
 <div class="card"><h3>Que s'est-il passé ?</h3>
 <form method="post" action="/app/demandes/${l.id}/statut" class="row" style="align-items:flex-end"><input type="hidden" name="status" value="devis_envoye">
-<div><label>Montant du devis TTC (€)</label><input name="quote_amount" inputmode="decimal" value="${l.quote_amount ?? ''}"></div><div><label>N° de devis</label><input name="quote_ref" value="${U.esc(l.quote_ref || '')}"></div>
+<div><label>Montant du devis ${U.C(req.account).tax} (€)</label><input name="quote_amount" inputmode="decimal" value="${l.quote_amount ?? ''}"></div><div><label>N° de devis</label><input name="quote_ref" value="${U.esc(l.quote_ref || '')}"></div>
 <div style="flex:0 0 auto"><button class="btn">${l.status === 'devis_envoye' ? 'Relancer à nouveau' : "J'ai envoyé le devis"}</button></div></form>
 <p class="small muted">Relances automatiques à J+${E.settingsOf(req.account).relances.days.join(', J+')} tant que le client n'a pas répondu.</p>
 <div class="actions">${act('rdv', '📅 Visite prévue')}${act('accepte', '✔ Devis signé', 'ok')}${act('termine', '🏁 Chantier terminé → demander un avis')}${act('refuse', 'Refusé')}${act('perdu', 'Sans suite')}${l.status !== 'nouveau' ? act('nouveau', 'Remettre en « nouvelle »') : ''}</div></div>
@@ -132,7 +132,7 @@ ${l.opt_out_sms || l.opt_out_email ? `<div class="banner">Ce client s'est désin
     const l = lead(req); if (!l) return res.redirect('/app/demandes');
     const b = req.body; const fields = {};
     for (const k of ['first_name', 'last_name', 'address', 'postal_code', 'city', 'work_type', 'preferred_slot', 'message', 'notes']) if (b[k] !== undefined) fields[k] = String(b[k]).trim();
-    if (b.phone !== undefined) fields.phone = U.normalizePhone(b.phone);
+    if (b.phone !== undefined) fields.phone = U.normalizePhone(b.phone, req.account.country);
     if (b.email !== undefined) fields.email = String(b.email).trim().toLowerCase();
     E.updateLead(db, l.id, fields);
     back(res, `/app/demandes/${l.id}`, 'Fiche enregistrée.');
@@ -185,9 +185,9 @@ ${signed.length ? `<h2>Chantiers signés</h2><table><tr><th>Client</th><th>Proje
 <p class="small muted">Textes, prestations, couleur et zone d'intervention se modifient dans Réglages. Pour un nom de domaine à lui (ex. dupont-chauffage.fr), faites une redirection vers ce lien.</p></div>
 <div class="card"><h3>3. SMS automatique après un appel manqué</h3>
 <p><b>Option A (Twilio, la plus simple côté artisan) :</b> achetez un numéro Twilio, réglez son « A call comes in » sur ce webhook (POST), puis l'artisan active le renvoi d'appel « si non-réponse » vers ce numéro (code **61*numéro# sur son mobile).</p><pre class="code">${B}/webhooks/twilio/voix/${a.webhook_token}</pre>
-<p><b>Option B (standard téléphonique, Make, Zapier, appli d'appels) :</b> appelez cette adresse avec le numéro de l'appelant :</p><pre class="code">${B}/webhooks/appel-manque/${a.webhook_token}?from=0612345678</pre>
+<p><b>Option B (standard téléphonique, Make, Zapier, appli d'appels) :</b> appelez cette adresse avec le numéro de l'appelant :</p><pre class="code">${B}/webhooks/appel-manque/${a.webhook_token}?from=${U.C(a).mobileExample.replace(/ /g, '')}</pre>
 <p>Page de prise de RDV envoyée par SMS : <a href="/rdv/${a.slug}" target="_blank">${B}/rdv/${a.slug}</a>${a.booking_url ? ' (redirige vers votre agenda en ligne)' : ''}</p>
-<form method="post" action="/app/integration/test-appel" class="row"><input name="from" placeholder="Numéro mobile de test, ex. 06…"><div style="flex:0 0 auto"><button class="btn sm">Simuler un appel manqué</button></div></form></div>
+<form method="post" action="/app/integration/test-appel" class="row"><input name="from" placeholder="Numéro mobile de test, ex. ${U.C(a).mobileExample}"><div style="flex:0 0 auto"><button class="btn sm">Simuler un appel manqué</button></div></form></div>
 <div class="card"><h3>4. Réponse STOP aux SMS</h3><p>Dans Brevo (ou Twilio), configurez l'URL des SMS entrants sur :</p><pre class="code">${B}/webhooks/sms-entrant${process.env.INBOUND_KEY ? '?key=' + U.esc(process.env.INBOUND_KEY) : ''}</pre><p class="small muted">Un client qui répond STOP ne reçoit plus aucun SMS, chez aucun de vos artisans.</p></div>
 </div>`, 'integration'));
   });
@@ -214,8 +214,9 @@ ${signed.length ? `<h2>Chantiers signés</h2><table><tr><th>Client</th><th>Proje
 <p class="small muted">Dans Google Business Profile : « Demander des avis » → copiez le lien.</p>
 <label>Agenda en ligne (facultatif : Calendly, Google Agenda…)</label><input name="booking_url" value="${v('booking_url')}" placeholder="Laisser vide pour utiliser la page de RDV intégrée">
 </div><div class="card"><h3>Mini-site</h3>
-<div class="row"><div><label>Ville principale</label><input name="city" value="${v('city')}"></div><div><label>SIRET</label><input name="siret" value="${v('siret')}"></div></div>
-<label>Adresse</label><input name="address" value="${v('address')}"><label>Zone d'intervention</label><input name="zone" value="${v('zone')}" placeholder="Lyon et 30 km autour">
+<div class="row"><div><label>Ville principale</label><input name="city" value="${v('city')}"></div><div><label>${U.C(a).bizLabel}</label><input name="siret" value="${v('siret')}"></div></div>
+<label>Pays</label><select name="country">${Object.entries(U.COUNTRIES).map(([k, c]) => `<option value="${k}" ${U.countryOf(a) === k ? 'selected' : ''}>${c.name}</option>`).join('')}</select>
+<label>Adresse</label><input name="address" value="${v('address')}"><label>Zone d'intervention</label><input name="zone" value="${v('zone')}" placeholder="Bruxelles et les 19 communes">
 <label>Présentation</label><textarea name="about">${v('about')}</textarea><label>Prestations (une par ligne)</label><textarea name="services">${v('services')}</textarea></div></div>
 <div class="grid g2" style="margin-top:14px"><div class="card"><h3>Automatisations</h3>
 ${chk('rel_enabled', s.relances.enabled, '<b>Relances de devis</b>')}
@@ -247,10 +248,11 @@ ${Object.keys(T).filter((k) => k !== 'appel_vocal').map((k) => tpl(k, k.replace(
     s.sms_footer = String(b.sms_footer ?? s.sms_footer);
     for (const k of Object.keys(DEFAULT_SETTINGS.templates)) if (b[`tpl_${k}`] !== undefined) s.templates[k] = String(b[`tpl_${k}`]);
     const email = String(b.email || a.email).trim().toLowerCase();
+    const country = U.COUNTRIES[b.country] ? b.country : U.countryOf(a);
     if (db.prepare('SELECT 1 FROM accounts WHERE email=? AND id<>?').get(email, a.id)) return res.redirect('/app/reglages?err=' + encodeURIComponent('Cet e-mail est déjà utilisé par un autre compte.'));
-    db.prepare(`UPDATE accounts SET company_name=?, owner_name=?, phone=?, email=?, sms_sender=?, primary_color=?, google_review_url=?, booking_url=?, city=?, siret=?, address=?, zone=?, about=?, services=?, settings=? WHERE id=?`)
-      .run(b.company_name || a.company_name, b.owner_name || '', U.normalizePhone(b.phone), email, (b.sms_sender || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 11), /^#[0-9a-f]{6}$/i.test(b.primary_color) ? b.primary_color : a.primary_color,
-        (b.google_review_url || '').trim(), (b.booking_url || '').trim(), b.city || '', b.siret || '', b.address || '', b.zone || '', b.about || '', b.services || '', JSON.stringify(s), a.id);
+    db.prepare(`UPDATE accounts SET company_name=?, owner_name=?, phone=?, email=?, sms_sender=?, primary_color=?, google_review_url=?, booking_url=?, city=?, siret=?, address=?, zone=?, about=?, services=?, settings=?, country=? WHERE id=?`)
+      .run(b.company_name || a.company_name, b.owner_name || '', U.normalizePhone(b.phone, country), email, (b.sms_sender || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 11), /^#[0-9a-f]{6}$/i.test(b.primary_color) ? b.primary_color : a.primary_color,
+        (b.google_review_url || '').trim(), (b.booking_url || '').trim(), b.city || '', b.siret || '', b.address || '', b.zone || '', b.about || '', b.services || '', JSON.stringify(s), country, a.id);
     back(res, '/app/reglages', 'Réglages enregistrés.');
   });
   r.post('/mot-de-passe', (req, res) => {

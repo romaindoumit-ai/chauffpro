@@ -5,20 +5,52 @@ const { openDb } = require('../src/db');
 const E = require('../src/engine');
 const U = require('../src/util');
 
-function setup() {
+function setup(country = 'FR') {
   const db = openDb(':memory:');
-  db.prepare(`INSERT INTO accounts (slug, company_name, owner_name, email, password_hash, phone, google_review_url, webhook_token, settings) VALUES ('test','Test Chauffage','Jean Test','jean@test.fr','x','+33611111111','https://g.page/r/x/review','wh','{"sms_footer":"STOP au 36000"}')`).run();
+  db.prepare(`INSERT INTO accounts (slug, company_name, owner_name, email, password_hash, phone, google_review_url, webhook_token, settings, country) VALUES ('test','Test Chauffage','Jean Test','jean@test.fr','x','+33611111111','https://g.page/r/x/review','wh','{"sms_footer":"STOP au 36000"}',?)`).run(country);
   return { db, a: db.prepare('SELECT * FROM accounts').get() };
 }
 const msgs = (db, id) => db.prepare('SELECT * FROM messages WHERE lead_id=? ORDER BY id').all(id);
 
 test('numéros de téléphone français', () => {
-  assert.equal(U.normalizePhone('06 12 34 56 78'), '+33612345678');
-  assert.equal(U.normalizePhone('+33 6 12 34 56 78'), '+33612345678');
-  assert.equal(U.normalizePhone('0033612345678'), '+33612345678');
+  assert.equal(U.normalizePhone('06 12 34 56 78', 'FR'), '+33612345678');
+  assert.equal(U.normalizePhone('+33 6 12 34 56 78', 'FR'), '+33612345678');
+  assert.equal(U.normalizePhone('0033612345678', 'FR'), '+33612345678');
+  assert.equal(U.normalizePhone('04 78 00 00 00', 'FR'), '+33478000000');
   assert.equal(U.normalizePhone('123'), '');
   assert.ok(U.isMobile('+33712345678'));
   assert.ok(!U.isMobile('+33412345678'));
+});
+
+test('numéros de téléphone belges', () => {
+  assert.equal(U.normalizePhone('0470 12 34 56', 'BE'), '+32470123456');
+  assert.equal(U.normalizePhone('+32 (0)470 12 34 56', 'BE'), '+32470123456');
+  assert.equal(U.normalizePhone('0032 470 12 34 56', 'BE'), '+32470123456');
+  assert.equal(U.normalizePhone('02 123 45 67', 'BE'), '+3221234567');
+  assert.equal(U.normalizePhone('06 12 34 56 78', 'BE'), '+33612345678'); // mobile français tapé en Belgique
+  assert.equal(U.normalizePhone('0212345678', 'BE'), '');
+  assert.equal(U.displayPhone('+32470123456'), '0470 12 34 56');
+  assert.equal(U.displayPhone('+3221234567'), '02 123 45 67');
+  assert.ok(U.isMobile('+32470123456'));
+  assert.ok(!U.isMobile('+3221234567'));
+});
+
+test('jours fériés belges et français', () => {
+  const be = { start: 9, end: 19, country: 'BE' }, fr = { start: 9, end: 19, country: 'FR' };
+  assert.ok(!U.inWindow(new Date('2027-07-21T10:00:00Z'), be)); // fête nationale belge (mercredi)
+  assert.ok(U.inWindow(new Date('2027-07-21T10:00:00Z'), fr));
+  assert.ok(!U.inWindow(new Date('2027-07-14T10:00:00Z'), fr)); // 14 juillet
+  assert.ok(U.inWindow(new Date('2027-07-14T10:00:00Z'), be));
+  assert.ok(!U.inWindow(new Date('2027-05-06T10:00:00Z'), be)); // Ascension 2027
+});
+
+test('compte belge : formulaire et appel manqué avec un numéro belge', () => {
+  const { db, a } = setup('BE');
+  const l = E.createLead(db, a, { first_name: 'Lotte', phone: '0478 12 34 56', consent: 1 });
+  assert.equal(l.phone, '+32478123456');
+  assert.ok(msgs(db, l.id).some((m) => m.kind === 'confirmation' && m.channel === 'sms'));
+  assert.ok(E.missedCall(db, a, '0479 98 76 54').smsScheduled);
+  assert.equal(E.missedCall(db, a, '02 513 00 00').smsScheduled, false); // fixe bruxellois
 });
 
 test("fenêtre d'envoi : pas le dimanche, pas les jours fériés, 9h-19h", () => {

@@ -32,7 +32,7 @@ ${fails ? `<div class="banner" style="margin-top:12px">⚠ ${fails} envoi(s) en 
 <h2>Ajouter un artisan</h2><div class="card" style="max-width:720px"><form method="post" action="/admin/comptes">
 <div class="row"><div><label>Entreprise *</label><input name="company_name" required></div><div><label>Nom du gérant</label><input name="owner_name"></div></div>
 <div class="row"><div><label>E-mail *</label><input name="email" type="email" required></div><div><label>Mobile</label><input name="phone"></div></div>
-<div class="row"><div><label>Ville</label><input name="city"></div><div><label>Abonnement (€/mois)</label><input name="monthly_price" type="number" value="99"></div></div>
+<div class="row"><div><label>Ville</label><input name="city"></div><div><label>Pays</label><select name="country">${Object.entries(U.COUNTRIES).map(([k, c]) => `<option value="${k}" ${U.DEFAULT_COUNTRY() === k ? 'selected' : ''}>${c.name}</option>`).join('')}</select></div><div><label>Abonnement (€/mois)</label><input name="monthly_price" type="number" value="99"></div></div>
 <label>Lien avis Google</label><input name="google_review_url">
 <p><button class="btn">Créer le compte</button></p></form></div>`, 'admin'));
   });
@@ -43,8 +43,9 @@ ${fails ? `<div class="banner" style="margin-top:12px">⚠ ${fails} envoi(s) en 
     let slug = U.slugify(b.company_name), i = 1;
     while (db.prepare('SELECT 1 FROM accounts WHERE slug=?').get(slug)) slug = `${U.slugify(b.company_name)}-${++i}`;
     const pw = U.token(6);
-    db.prepare(`INSERT INTO accounts (slug, company_name, owner_name, email, password_hash, phone, city, google_review_url, monthly_price, webhook_token, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
-      .run(slug, b.company_name, b.owner_name || '', email, U.hashPassword(pw), U.normalizePhone(b.phone), b.city || '', b.google_review_url || '', +b.monthly_price || 0, U.token(), U.iso(new Date()));
+    const country = U.COUNTRIES[b.country] ? b.country : U.DEFAULT_COUNTRY();
+    db.prepare(`INSERT INTO accounts (slug, company_name, owner_name, email, password_hash, phone, city, google_review_url, monthly_price, webhook_token, created_at, country) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(slug, b.company_name, b.owner_name || '', email, U.hashPassword(pw), U.normalizePhone(b.phone, country), b.city || '', b.google_review_url || '', +b.monthly_price || 0, U.token(), U.iso(new Date()), country);
     res.redirect(`/admin?email=${encodeURIComponent(email)}&pw=${encodeURIComponent(pw)}`);
   });
   const adminId = (req) => (req.account.is_admin ? req.account.id : req.adminId);

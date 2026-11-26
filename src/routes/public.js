@@ -32,7 +32,7 @@ ${error ? `<div class="flash err">${U.esc(error)}</div>` : ''}
 <div class="row"><div><label>Surface (m²)</label><input name="surface" inputmode="numeric" value="${v('surface')}"></div>
 <div><label>Délai souhaité</label><select name="delay"><option>Urgent (panne)</option><option selected>Dans le mois</option><option>Dans les 3 mois</option><option>Je me renseigne</option></select></div></div>
 <div class="row"><div><label>Prénom *</label><input name="first_name" required value="${v('first_name')}"></div><div><label>Nom</label><input name="last_name" value="${v('last_name')}"></div></div>
-<div class="row"><div><label>Téléphone mobile *</label><input name="phone" type="tel" required value="${v('phone')}" placeholder="06 12 34 56 78"></div><div><label>E-mail</label><input name="email" type="email" value="${v('email')}"></div></div>
+<div class="row"><div><label>Téléphone mobile *</label><input name="phone" type="tel" required value="${v('phone')}" placeholder="${U.C(a).mobileExample}"></div><div><label>E-mail</label><input name="email" type="email" value="${v('email')}"></div></div>
 <div class="row"><div><label>Code postal *</label><input name="postal_code" required value="${v('postal_code')}"></div><div><label>Ville</label><input name="city" value="${v('city')}"></div></div>
 <label>Précisions (marque, problème, disponibilités…)</label><textarea name="message">${v('message')}</textarea>
 <input class="hp" name="website" tabindex="-1" autocomplete="off">
@@ -45,7 +45,7 @@ ${error ? `<div class="flash err">${U.esc(error)}</div>` : ''}
     const embed = !!req.query.embed;
     if (b.website) return res.redirect(`/f/${a.slug}/merci`); // robot
     if (limited(req.ip)) return res.status(429).send(publicLayout('Trop de demandes', '<div class="card">Trop de demandes envoyées. Réessayez plus tard ou appelez-nous.</div>'));
-    const phone = U.normalizePhone(b.phone);
+    const phone = U.normalizePhone(b.phone, a.country);
     let error = '';
     if (!b.first_name || !b.work_type || !b.postal_code) error = 'Merci de remplir les champs obligatoires.';
     else if (!phone) error = 'Le numéro de téléphone semble incorrect.';
@@ -83,17 +83,17 @@ ${error ? `<div class="flash err">${U.esc(error)}</div>` : ''}
 ${a.zone ? `<h2>Zone d'intervention</h2><p>${U.esc(a.zone)}</p>` : ''}
 ${a.google_review_url ? `<p><a href="${U.esc(a.google_review_url)}" target="_blank" rel="noopener">⭐ Voir nos avis clients sur Google</a></p>` : ''}</div></section>
 <section class="site-sec alt" id="devis"><div class="in" style="max-width:640px"><h2>Demande de devis gratuit</h2>${quoteForm(a, { action: `/f/${a.slug}?src=site` }).replace('?src=site?embed=1', '?src=site')}</div></section>
-<footer class="site">${U.esc(a.company_name)}${a.address ? ' · ' + U.esc(a.address) : ''}${a.siret ? ' · SIRET ' + U.esc(a.siret) : ''}<br><a href="/s/${a.slug}/confidentialite">Mentions légales et données personnelles</a></footer></body></html>`);
+<footer class="site">${U.esc(a.company_name)}${a.address ? ' · ' + U.esc(a.address) : ''}${a.siret ? ` · ${U.C(a).bizShort} ` + U.esc(a.siret) : ''}<br><a href="/s/${a.slug}/confidentialite">Mentions légales et données personnelles</a></footer></body></html>`);
   });
   r.get('/s/:slug/confidentialite', (req, res) => {
     const a = bySlug(req.params.slug); if (!a) return notFound(res);
     res.send(publicLayout('Données personnelles', `<div class="card"><h1>Mentions légales et données personnelles</h1>
-<p><b>Éditeur :</b> ${U.esc(a.company_name)}${a.address ? ', ' + U.esc(a.address) : ''}${a.siret ? ' · SIRET ' + U.esc(a.siret) : ''}. Contact : ${U.esc(a.email)}${a.phone ? ' · ' + U.esc(U.displayPhone(a.phone)) : ''}.</p>
+<p><b>Éditeur :</b> ${U.esc(a.company_name)}${a.address ? ', ' + U.esc(a.address) : ''}${a.siret ? ` · ${U.C(a).bizShort} ` + U.esc(a.siret) : ''}. Contact : ${U.esc(a.email)}${a.phone ? ' · ' + U.esc(U.displayPhone(a.phone)) : ''}.</p>
 <p><b>Données collectées :</b> nom, prénom, téléphone, e-mail, adresse et description de votre projet, uniquement pour répondre à votre demande (devis, prise de rendez-vous, suivi de votre devis, demande d'avis après intervention).</p>
 <p><b>Base légale :</b> votre consentement et les mesures précontractuelles prises à votre demande.</p>
 <p><b>Durée de conservation :</b> 3 ans après le dernier contact, puis suppression.</p>
 <p><b>Destinataires :</b> ${U.esc(a.company_name)} et ses sous-traitants techniques (hébergement, envoi de SMS et d'e-mails), situés dans l'Union européenne. Vos données ne sont jamais vendues.</p>
-<p><b>Vos droits :</b> accès, rectification, effacement, opposition. Écrivez à ${U.esc(a.email)}. Vous pouvez répondre STOP à tout SMS et utiliser le lien de désinscription présent dans chaque e-mail. Vous pouvez aussi saisir la CNIL (cnil.fr).</p></div>`, { color: a.primary_color }));
+<p><b>Vos droits :</b> accès, rectification, effacement, opposition. Écrivez à ${U.esc(a.email)}. Vous pouvez répondre STOP à tout SMS et utiliser le lien de désinscription présent dans chaque e-mail. Vous pouvez aussi introduire une réclamation auprès de ${U.esc(U.C(a).authority)}.</p></div>`, { color: a.primary_color }));
   });
 
   // ---- Prise de RDV (lien envoyé après un appel manqué) ----
@@ -102,7 +102,7 @@ ${a.google_review_url ? `<p><a href="${U.esc(a.google_review_url)}" target="_bla
     if (a.booking_url) return res.redirect(a.booking_url);
     const lead = req.query.l ? byToken(req.query.l) : null;
     const days = []; let d = new Date();
-    while (days.length < 8) { d = U.addDays(d, 1); const p = U.parisParts(d); if (!p.wd.startsWith('dim')) days.push(d.toLocaleDateString('fr-FR', { timeZone: 'Europe/Paris', weekday: 'long', day: 'numeric', month: 'long' })); }
+    while (days.length < 8) { d = U.addDays(d, 1); const p = U.parisParts(d); if (!p.wd.startsWith('dim')) days.push(d.toLocaleDateString('fr-FR', { timeZone: 'Europe/Brussels', weekday: 'long', day: 'numeric', month: 'long' })); }
     res.send(publicLayout(`Rendez-vous · ${a.company_name}`, `<div class="card"><div class="muted small">${U.esc(a.company_name)}</div><h1>Être rappelé ou prendre rendez-vous</h1>
 <form method="post"><input type="hidden" name="l" value="${U.esc(req.query.l || '')}">
 <label>Votre besoin *</label><select name="work_type" required>${WORK_TYPES.map((w) => `<option>${w}</option>`).join('')}</select>
@@ -119,7 +119,7 @@ ${a.google_review_url ? `<p><a href="${U.esc(a.google_review_url)}" target="_bla
     const b = req.body || {};
     if (b.website) return res.redirect(`/f/${a.slug}/merci`);
     if (limited(req.ip)) return res.status(429).send('Trop de demandes');
-    const phone = U.normalizePhone(b.phone);
+    const phone = U.normalizePhone(b.phone, a.country);
     if (!phone || !b.first_name || !b.consent) return res.redirect(`/rdv/${a.slug}?l=${encodeURIComponent(b.l || '')}`);
     const slot = `${b.day || ''} · ${b.slot || ''}`;
     const existing = b.l ? byToken(b.l) : null;

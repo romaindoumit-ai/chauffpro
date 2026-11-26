@@ -70,7 +70,15 @@ Les délais (J+2, J+7, J+14…), les canaux (SMS et/ou e-mail) et **tous les tex
 
 En local, ou sur une deuxième instance Render de démonstration, lancez `npm run demo`. Cela crée le compte `demo@chauffpro.fr` / `demo1234`. On y trouve 7 clients fictifs à tous les stades, des relances déjà parties, un appel manqué et un bilan du mois.
 
-## 5. Règles françaises déjà prises en compte
+## 5. Belgique et France
+
+Le logiciel est réglé pour la **Belgique** par défaut. Chaque artisan peut passer en France dans Réglages › Mini-site › Pays.
+
+- **Numéros** : `0470 12 34 56`, `+32 470…` ou `02 123 45 67` sont reconnus. Les SMS ne partent que vers les mobiles (04xx en Belgique, 06/07 en France). Un mobile français tapé dans un formulaire belge est aussi reconnu.
+- **Jours fériés** : ceux du pays de l'artisan (en Belgique : 21 juillet, lundi de Pâques, Ascension, lundi de Pentecôte, etc.). Aucun message client ne part ces jours-là.
+- **Mentions** : numéro d'entreprise (BCE), montants TVAC et Autorité de protection des données pour la Belgique ; SIRET, TTC et CNIL pour la France.
+
+### Règles d'envoi déjà prises en compte
 
 - **Horaires d'envoi** : les SMS et e-mails aux clients ne partent que du lundi au samedi, de 9 h à 19 h, hors jours fériés (Pâques et Pentecôte comprises). Un message prévu en dehors est décalé automatiquement. Les horaires se règlent par artisan, entre 8 h et 20 h.
 - **STOP** : les relances et les demandes d'avis partent en SMS « marketing » chez Brevo, qui ajoute lui-même la mention « STOP au 3xxxx » et bloque les numéros désinscrits. L'application a aussi sa propre liste STOP : l'adresse « SMS entrants » est à brancher dans Brevo ou Twilio. Chaque e-mail contient un lien de désinscription.

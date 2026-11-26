@@ -6,7 +6,11 @@ const providers = require('./providers');
 const BASE = () => (process.env.BASE_URL || 'http://localhost:3000').replace(/\/$/, '');
 const now = () => new Date();
 
-function settingsOf(account) { return mergeSettings(account.settings); }
+function settingsOf(account) {
+  const s = mergeSettings(account.settings);
+  s.window.country = U.countryOf(account); // jours fériés du pays de l'artisan
+  return s;
+}
 
 function logEvent(db, accountId, leadId, type, detail = '') {
   db.prepare('INSERT INTO events (account_id, lead_id, type, detail, created_at) VALUES (?,?,?,?,?)').run(accountId, leadId ?? null, type, detail, U.iso(now()));
@@ -73,7 +77,7 @@ function schedule(db, account, lead, kind, channel, at, { tplKey, respectWindow 
     html = emailHtml(account, body, { buttons, lead });
   }
   let when = new Date(at);
-  if (respectWindow) when = U.nextAllowed(when, window || s.window);
+  if (respectWindow) when = U.nextAllowed(when, window ? { country: s.window.country, ...window } : s.window);
   const r = db.prepare(`INSERT INTO messages (account_id, lead_id, kind, channel, to_addr, subject, body, html, respect_window, scheduled_at, created_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(account.id, lead.id ?? null, kind, channel, to, subject, body, html, respectWindow ? 1 : 0, U.iso(when), U.iso(now()));
   return Number(r.lastInsertRowid);
@@ -95,7 +99,7 @@ function notifyArtisan(db, account, leadId, subject, text) {
 function getLead(db, id) { return db.prepare('SELECT * FROM leads WHERE id=?').get(id); }
 
 function createLead(db, account, data, { source = 'formulaire', notify = true, confirm = true } = {}) {
-  const phone = U.normalizePhone(data.phone);
+  const phone = U.normalizePhone(data.phone, account.country);
   const email = (data.email || '').trim().toLowerCase();
   const r = db.prepare(`INSERT INTO leads (account_id, first_name, last_name, phone, email, address, postal_code, city, work_type, message, preferred_slot, source, status, consent, token, created_at, updated_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(account.id, (data.first_name || '').trim(), (data.last_name || '').trim(), phone, email,
@@ -194,7 +198,7 @@ function clientChoice(db, lead, choice) {
 /** Appel manqué : SMS immédiat avec lien de prise de RDV. */
 function missedCall(db, account, fromRaw) {
   const s = settingsOf(account);
-  const phone = U.normalizePhone(fromRaw);
+  const phone = U.normalizePhone(fromRaw, account.country);
   if (!phone) return { ok: false, reason: 'numéro invalide ou masqué' };
   if (!s.appel.enabled) return { ok: false, reason: 'option désactivée' };
   const recent = db.prepare(`SELECT 1 FROM messages WHERE account_id=? AND kind='appel' AND to_addr=? AND created_at > ? LIMIT 1`).get(account.id, phone, U.iso(U.addHours(now(), -24)));
@@ -248,7 +252,7 @@ function stats(db, accountId, from, to) {
     taux: devis ? Math.round((signes.n / devis) * 100) : 0,
   };
 }
-function monthRange(ym) { // 'AAAA-MM' -> bornes en heure de Paris (approx. via UTC+0 minuit local)
+function monthRange(ym) { // 'AAAA-MM' -> bornes en heure de Bruxelles/Paris (approx. via UTC+0 minuit local)
   const [y, m] = ym.split('-').map(Number);
   const start = new Date(Date.UTC(y, m - 1, 1)), end = new Date(Date.UTC(y, m, 1));
   const off = (d) => { const p = U.parisParts(d); return (p.h || 24) % 24; };

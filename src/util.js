@@ -16,21 +16,48 @@ function checkPassword(pw, stored) {
   return crypto.timingSafeEqual(test, Buffer.from(hash, 'hex'));
 }
 
-// Numéro français -> format international +33XXXXXXXXX
-function normalizePhone(raw) {
+// ---------- Pays (Belgique par défaut, France possible) ----------
+const COUNTRIES = {
+  BE: {
+    name: 'Belgique', dial: '32', mobileExample: '0470 12 34 56', bizLabel: "N° d'entreprise (BCE)", bizShort: 'BCE', tax: 'TVAC',
+    authority: "l'Autorité de protection des données (autoriteprotectiondonnees.be)",
+  },
+  FR: {
+    name: 'France', dial: '33', mobileExample: '06 12 34 56 78', bizLabel: 'SIRET', bizShort: 'SIRET', tax: 'TTC',
+    authority: 'la CNIL (cnil.fr)',
+  },
+};
+const DEFAULT_COUNTRY = () => (COUNTRIES[(process.env.COUNTRY || '').toUpperCase()] ? process.env.COUNTRY.toUpperCase() : 'BE');
+const countryOf = (account) => (account && COUNTRIES[account.country] ? account.country : DEFAULT_COUNTRY());
+const C = (account) => COUNTRIES[countryOf(account)];
+
+// Numéro national ou international -> format international +32XXXXXXXX / +33XXXXXXXXX
+function normalizePhone(raw, country) {
   if (!raw) return '';
+  const cc = COUNTRIES[country] ? country : DEFAULT_COUNTRY();
   let p = String(raw).replace(/[^\d+]/g, '');
   if (p.startsWith('00')) p = '+' + p.slice(2);
-  if (/^0[1-9]\d{8}$/.test(p)) p = '+33' + p.slice(1);
-  if (/^33[1-9]\d{8}$/.test(p)) p = '+' + p;
+  if (/^\+(32|33)0/.test(p)) p = p.slice(0, 3) + p.slice(4); // +32 (0)470… -> +32470…
+  if (/^3[23][1-9]\d{7,8}$/.test(p)) p = '+' + p;
+  if (cc === 'BE') {
+    if (/^04\d{8}$/.test(p) || /^0[1-9]\d{7}$/.test(p)) p = '+32' + p.slice(1); // mobile 04xx xx xx xx ou fixe 0X XXX XX XX
+    else if (/^0[67]\d{8}$/.test(p)) p = '+33' + p.slice(1); // mobile français tapé sans indicatif
+  }
+  if (cc === 'FR' && /^0[1-9]\d{8}$/.test(p)) p = '+33' + p.slice(1);
+  if (p.startsWith('+32') && !/^\+32(4\d{8}|[1-9]\d{7})$/.test(p)) return '';
+  if (p.startsWith('+33') && !/^\+33\d{9}$/.test(p)) return '';
   return /^\+\d{8,15}$/.test(p) ? p : '';
 }
 function displayPhone(p) {
   if (!p) return '';
   if (/^\+33\d{9}$/.test(p)) return ('0' + p.slice(3)).replace(/(\d{2})(?=\d)/g, '$1 ');
+  if (/^\+32\d{9}$/.test(p)) return ('0' + p.slice(3)).replace(/^(\d{4})(\d{2})(\d{2})(\d{2})$/, '$1 $2 $3 $4'); // 0470 12 34 56
+  if (/^\+32[2349]\d{7}$/.test(p)) return ('0' + p.slice(3)).replace(/^(\d{2})(\d{3})(\d{2})(\d{2})$/, '$1 $2 $3 $4'); // 02 123 45 67
+  if (/^\+32\d{8}$/.test(p)) return ('0' + p.slice(3)).replace(/^(\d{3})(\d{2})(\d{2})(\d{2})$/, '$1 $2 $3 $4'); // 010 12 34 56
   return p;
 }
-const isMobile = (p) => /^\+33[67]\d{8}$/.test(p) || (p.startsWith('+') && !p.startsWith('+33'));
+// Mobile = peut recevoir un SMS. Numéros étrangers (hors BE/FR) acceptés par défaut.
+const isMobile = (p) => /^\+33[67]\d{8}$/.test(p) || /^\+324[5-9]\d{7}$/.test(p) || (p.startsWith('+') && !p.startsWith('+33') && !p.startsWith('+32'));
 
 function slugify(s) {
   return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
@@ -41,9 +68,9 @@ function render(tpl, vars) {
   return String(tpl || '').replace(/\{(\w+)\}/g, (m, k) => (vars[k] !== undefined && vars[k] !== null ? String(vars[k]) : ''));
 }
 
-// ---------- Heures d'envoi autorisées (Europe/Paris) ----------
+// ---------- Heures d'envoi autorisées (heure de Bruxelles = heure de Paris) ----------
 const fmt = new Intl.DateTimeFormat('fr-FR', {
-  timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit',
+  timeZone: 'Europe/Brussels', year: 'numeric', month: '2-digit', day: '2-digit',
   hour: '2-digit', minute: '2-digit', weekday: 'short', hourCycle: 'h23',
 });
 function parisParts(d) {
@@ -58,17 +85,19 @@ function easter(y) {
   const month = Math.floor((h + l - 7 * m + 114) / 31), day = ((h + l - 7 * m + 114) % 31) + 1;
   return new Date(Date.UTC(y, month - 1, day));
 }
-function frenchHolidays(y) {
+function holidays(y, country) {
   const e = easter(y), add = (n) => { const x = new Date(e); x.setUTCDate(x.getUTCDate() + n); return `${x.getUTCMonth() + 1}-${x.getUTCDate()}`; };
-  return new Set(['1-1', '5-1', '5-8', '7-14', '8-15', '11-1', '11-11', '12-25', add(1), add(39), add(50)]);
+  const common = ['1-1', '5-1', '8-15', '11-1', '11-11', '12-25', add(1), add(39), add(50)]; // + lundi de Pâques, Ascension, lundi de Pentecôte
+  return new Set((country || DEFAULT_COUNTRY()) === 'FR' ? [...common, '5-8', '7-14'] : [...common, '7-21']); // 21 juillet : fête nationale belge
 }
-function isHoliday(p) { return frenchHolidays(p.y).has(`${p.m}-${p.d}`); }
+const frenchHolidays = (y) => holidays(y, 'FR');
+function isHoliday(p, country) { return holidays(p.y, country).has(`${p.m}-${p.d}`); }
 
-// Fenêtre par défaut : lundi-samedi, 9h-19h, hors dimanches et jours fériés.
+// Fenêtre par défaut : lundi-samedi, 9h-19h, hors dimanches et jours fériés (du pays de l'artisan : win.country).
 function inWindow(date, win) {
   win = win || { start: 9, end: 19 };
   const p = parisParts(date);
-  if (!win.allDays && (p.wd.startsWith('dim') || isHoliday(p))) return false;
+  if (!win.allDays && (p.wd.startsWith('dim') || isHoliday(p, win.country))) return false;
   return p.h >= win.start && p.h < win.end;
 }
 function nextAllowed(date, win) {
@@ -86,8 +115,8 @@ const addHours = (d, n) => new Date(new Date(d).getTime() + n * 3600000);
 function frDate(s, withTime = true) {
   if (!s) return '';
   const d = new Date(s.endsWith('Z') || s.includes('T') ? s : s.replace(' ', 'T') + 'Z');
-  return d.toLocaleString('fr-FR', { timeZone: 'Europe/Paris', day: '2-digit', month: '2-digit', year: 'numeric', ...(withTime ? { hour: '2-digit', minute: '2-digit' } : {}) });
+  return d.toLocaleString('fr-FR', { timeZone: 'Europe/Brussels', day: '2-digit', month: '2-digit', year: 'numeric', ...(withTime ? { hour: '2-digit', minute: '2-digit' } : {}) });
 }
 const euros = (n) => (n == null || n === '' ? '' : Number(n).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }));
 
-module.exports = { esc, token, hashPassword, checkPassword, normalizePhone, displayPhone, isMobile, slugify, render, parisParts, inWindow, nextAllowed, frenchHolidays, iso, addDays, addHours, frDate, euros };
+module.exports = { esc, token, hashPassword, checkPassword, COUNTRIES, DEFAULT_COUNTRY, countryOf, C, normalizePhone, displayPhone, isMobile, slugify, render, parisParts, inWindow, nextAllowed, holidays, frenchHolidays, iso, addDays, addHours, frDate, euros };

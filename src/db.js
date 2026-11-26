@@ -95,6 +95,13 @@ function migrate(db) {
     created_at TEXT DEFAULT (datetime('now'))
   );
   `);
+  // Colonnes ajoutées après la première version (les bases existantes sont mises à jour automatiquement).
+  addColumns(db, 'accounts', { country: "TEXT DEFAULT 'BE'" });
+}
+
+function addColumns(db, table, cols) {
+  const have = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name));
+  for (const [name, def] of Object.entries(cols)) if (!have.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`);
 }
 
 module.exports = { openDb };
